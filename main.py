@@ -5,6 +5,9 @@ import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
 import datetime
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+
 
 from file_utils import (
     base_path, product, species, stations_path,
@@ -41,6 +44,7 @@ from plots import (
     plot_ratio_bars,
     plot_cum_sector_ratio_timeseries,
     plot_cum_distance_ratio_timeseries,
+    plot_variable_on_map,plot_rectangles
 )
 
 from io_netcdf import df30min_to_netcdf_station_species
@@ -58,7 +62,7 @@ END_DT   = datetime.datetime(2005, 5, 20, 3, 0)
 # Mode works for BOTH single timestep and period
 MODE = "A"          # "A" or "HEIGHT"
 idx = 5
-cell_nums = 20
+cell_nums = 50
 dist_bins_km = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 out_dir = "/home/agkiokas/CAMS/plots/"
 
@@ -92,6 +96,9 @@ def _single_timestep_small_box_indices(i, j, Ny, Nx, cell_nums):
     ii = i - i1_s
     jj = j - j1_s
     return i1_s, i2_s, j1_s, j2_s, ii, jj
+def _get_time_str(ds_species):
+    tval = ds_species[species]["time"].values[0]
+    return pd.to_datetime(tval).strftime("%Y-%m-%d %H:%M")
 
 
 # -----------------------
@@ -107,6 +114,12 @@ def run_single_timestep(mode="A", weighted=True):
     Uses the fixed paths imported from file_utils:
       species_file, T_file, pl_file, RH_file, orog_file
     """
+    # ---- local plotting settings (same as your old main) ----
+    d_zoom_species = 3
+    d_zoom_topo = 20.0
+    zoom_map = 45.0
+    fig4_with_topo = False  # set True if you want station map on topo background
+
     stations = load_stations(stations_path)
     station = select_station(stations, idx)
 
@@ -131,14 +144,35 @@ def run_single_timestep(mode="A", weighted=True):
 
         Ny, Nx = (lats.shape[0], lons.shape[0]) if np.ndim(lats) == 1 else lats.shape
         i1_s, i2_s, j1_s, j2_s, ii, jj = _single_timestep_small_box_indices(i, j, Ny, Nx, cell_nums)
-
+        
         lats_small = lats[i1_s:i2_s + 1]
         lons_small = lons[j1_s:j2_s + 1]
         radii = list(range(1, cell_nums + 1))
 
         # weights aligned to small box
         w_area_small = compute_w_area_small(lats_small, lons_small) if weighted else None
+        # ---- time string ----
+        time_str = _get_time_str(ds_species)
 
+        # ---- Topography background domain (big box for topo plot) ----
+        dlat_deg = float(np.abs(lats[1] - lats[0]))
+        dlon_deg = float(np.abs(lons[1] - lons[0]))
+
+        cell_nums_lat = int(np.ceil(d_zoom_topo / dlat_deg))
+        cell_nums_lon = int(np.ceil(d_zoom_topo / dlon_deg))
+        cell_nums_bg = max(cell_nums_lat, cell_nums_lon)
+
+        i1_bg = max(0, i - cell_nums_bg)
+        i2_bg = min(Ny - 1, i + cell_nums_bg)
+        j1_bg = max(0, j - cell_nums_bg)
+        j2_bg = min(Nx - 1, j + cell_nums_bg)
+
+        # NOTE: if ds_orog has no time dim, drop isel(time=0)
+        PHIS_bg = ds_orog["PHIS"].isel(time=0, lat=slice(i1_bg, i2_bg + 1), lon=slice(j1_bg, j2_bg + 1)).values
+        z_orog_bg = PHIS_bg / 9.80665
+
+        lats_bg = lats[i1_bg:i2_bg + 1]
+        lons_bg = lons[j1_bg:j2_bg + 1]
         # build ppb field (small box) using chosen vertical mode
         if str(mode).upper() == "A":
             grid_ppb, meta_v = extract_smallbox_ppb_optionA_fixed_k(
@@ -159,7 +193,18 @@ def run_single_timestep(mode="A", weighted=True):
 
         time_str = _time_str_from_species_ds(ds_species, species)
         center_value = float(grid_ppb[ii, jj])
-
+        meta = {
+            "station_name": name,
+            "station_lat": lat_s,
+            "station_lon": lon_s,
+            "station_alt": alt_s,
+            "model_lat": float(lats[i]) if np.ndim(lats) == 1 else float(lats[i, j]),
+            "model_lon": float(lons[j]) if np.ndim(lons) == 1 else float(lons[i, j]),
+            "time_str": time_str,
+            "species": species,
+            "units": "ppb",
+            **meta_v,
+        }
         # sectors + cumulative sectors
         sector_dfs, sector_masks = compute_sector_tables_generic(
             ii, jj, lats_small, lons_small, grid_ppb, species, radii=radii
@@ -220,7 +265,7 @@ def run_single_timestep(mode="A", weighted=True):
             labels=[f"{k}" for k in range(1, len(cum_dfs) + 1)],
             w_col="w_area" if weighted else None
         )
-        """
+        
         fig_r1, ax_r1 = plot_ratio_bars(
             df_ratio_cum,
             xlabel="Sectors",
@@ -239,8 +284,136 @@ def run_single_timestep(mode="A", weighted=True):
             xlabel="Distance < km",
             title=f"{species} {time_str}: Cumulative distance mean / center"
         )
-    """
+        fig1, ax1, im1 = plot_variable_on_map(
+        lats_small, lons_small, grid_ppb,
+         lon_s, lat_s,
+        units="ppb",
+        species_name=species,
+        d=d_zoom_species,
+        time_str=time_str,
+        meta=meta, z_orog_m=z_orog_bg,          
+        lats_terrain=lats_bg, lons_terrain=lons_bg,
+        add_orog_contours=True, plot_orography=False
+                      )
+
+    
+
+        fig2, ax2, im2 = plot_variable_on_map(
+        lats_small, lons_small, grid_ppb,
+        lon_s, lat_s,
+        units='ppb',
+        species_name=species,
+        d=d_zoom_species,
+        time_str=time_str,
+         meta=meta,
+        z_orog_m=z_orog_bg,
+        lats_terrain=lats_bg,
+        lons_terrain=lons_bg,plot_orography=False
+)
+        plot_rectangles(ax2, lats_small, lons_small, ii, jj, im2, meta=meta,radii=radii)
         plt.show()
+         # FIG 3 — Topography-only map
+        # ============================================================
+        fig3, ax3, _ = plot_variable_on_map(
+            lats_small,
+            lons_small,
+            data_arr=None,
+            lon_s=lon_s,
+            lat_s=lat_s,
+            units="",
+            species_name="",
+            d=d_zoom_topo,
+            meta=meta,
+            lats_terrain=lats_bg,
+            lons_terrain=lons_bg,
+            plot_orography=True,
+            z_orog_m=z_orog_bg,
+            terrain_alpha=0.6,
+            add_orog_contours=True,
+            plot_species=False,
+        )
+        plt.show()
+
+        # ============================================================
+        # FIG 4 — Stations context map (optionally with topography)
+        # ============================================================
+        proj = ccrs.PlateCarree()
+
+        if fig4_with_topo:
+            fig4, ax4, _ = plot_variable_on_map(
+                lats_small,
+                lons_small,
+                data_arr=None,
+                lon_s=lon_s,
+                lat_s=lat_s,
+                units="",
+                species_name="",
+                d=d_zoom_topo,
+                meta=meta,
+                lats_terrain=lats_bg,
+                lons_terrain=lons_bg,
+                plot_orography=True,
+                z_orog_m=z_orog_bg,
+                add_orog_contours=True,
+                plot_species=False,
+            )
+        else:
+            fig4, ax4 = plt.subplots(subplot_kw={"projection": proj})
+            lon_min, lon_max = lon_s - zoom_map, lon_s + zoom_map
+            lat_min, lat_max = lat_s - zoom_map, lat_s + zoom_map
+            ax4.set_extent([lon_min, lon_max, lat_min, lat_max], crs=proj)
+
+            ax4.add_feature(cfeature.LAND, facecolor="lightgray", zorder=0)
+            ax4.add_feature(cfeature.OCEAN, facecolor="lightblue", zorder=0)
+            ax4.coastlines(resolution="10m", linewidth=0.8)
+            ax4.add_feature(cfeature.BORDERS, linewidth=0.5, zorder=1)
+
+            gl = ax4.gridlines(
+                crs=proj,
+                draw_labels=True,
+                linewidth=0.6,
+                alpha=0.95,
+                linestyle="--",
+                zorder=1
+            )
+
+        st = stations.copy()
+        st["Latitude"] = pd.to_numeric(st["Latitude"], errors="coerce")
+        st["Longitude"] = pd.to_numeric(st["Longitude"], errors="coerce")
+        st = st.dropna(subset=["Latitude", "Longitude"])
+
+        lon_min, lon_max = lon_s - zoom_map, lon_s + zoom_map
+        lat_min, lat_max = lat_s - zoom_map, lat_s + zoom_map
+        st = st[st["Longitude"].between(lon_min, lon_max) & st["Latitude"].between(lat_min, lat_max)]
+
+        ax4.scatter(
+            st["Longitude"].values,
+            st["Latitude"].values,
+            s=6,
+            c="k",
+            alpha=0.7,
+            transform=proj,
+            zorder=6,
+            label="Stations",
+        )
+
+        ax4.scatter(
+            [lon_s],
+            [lat_s],
+            s=45,
+            c="red",
+            edgecolors="k",
+            linewidths=0.6,
+            transform=proj,
+            zorder=7,
+            label=f"Selected: {name}",
+        )
+
+        ax4.legend(loc="upper right")
+        ax4.set_title("Stations context map", pad=18)
+        plt.show()
+
+    
         print("Vertical meta:", meta_v)
 
     finally:

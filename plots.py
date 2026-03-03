@@ -99,7 +99,7 @@ def build_meta_title(meta, kind=""):
     )
     line3 = (
         f"Model: ({meta['model_lat']:.2f}, {meta['model_lon']:.2f}), "
-        f"lev={meta['model_level']}, alt={meta['z_level_m']:.1f} m"
+        #f"lev={meta['k_star']+1}, alt={meta['z_star_m']:.1f} m"
     )
     return header + "\n" + line2 + "\n" + line3
 
@@ -259,7 +259,20 @@ def plot_variable_on_map(
     # -----------------------------
     # Gridlines with DMS labels
     # -----------------------------
-    step = 0.4  # degrees
+    lon_span = float(abs(lon_max - lon_min))
+    lat_span = float(abs(lat_max - lat_min))
+    span = max(lon_span, lat_span)
+    # target at least 4 tick marks (3 intervals) across the span
+# step_raw is "span/3", then snap to a "nice" step
+    target_intervals = 3.0
+    step_raw = span / target_intervals if span > 0 else 0.1
+
+# snap to "nice" steps (degrees)
+    nice_steps = np.array([0.05, 0.1, 0.2, 0.25, 0.4, 0.5, 1.0, 2.0, 5.0, 10.0], dtype=float)
+    step = float(nice_steps[np.argmin(np.abs(nice_steps - step_raw))])
+
+# safeguard: if extremely zoomed in, keep it fine
+    step = max(step, 0.02)
     lon0 = np.floor(lon_min / step) * step
     lon1 = np.ceil(lon_max / step) * step
     lat0 = np.floor(lat_min / step) * step
@@ -267,7 +280,17 @@ def plot_variable_on_map(
 
     xticks = np.round(np.arange(lon0, lon1 + 0.5 * step, step), 6)
     yticks = np.round(np.arange(lat0, lat1 + 0.5 * step, step), 6)
-
+    for _ in range(2):
+        if xticks.size < 3 or yticks.size < 3:
+         step = step / 2.0
+         lon0 = np.floor(lon_min / step) * step
+         lon1 = np.ceil(lon_max / step) * step
+         lat0 = np.floor(lat_min / step) * step
+         lat1 = np.ceil(lat_max / step) * step
+         xticks = np.round(np.arange(lon0, lon1 + 0.5 * step, step), 6)
+         yticks = np.round(np.arange(lat0, lat1 + 0.5 * step, step), 6)
+        else:
+         break
     gl = ax.gridlines(
         crs=ccrs.PlateCarree(),
         draw_labels=True,
