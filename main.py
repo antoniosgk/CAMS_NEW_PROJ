@@ -115,7 +115,7 @@ def run_single_timestep(mode="A", weighted=True):
       species_file, T_file, pl_file, RH_file, orog_file
     """
     # ---- local plotting settings (same as your old main) ----
-    d_zoom_species = 2.0
+    d_zoom_species = 0.8
     d_zoom_topo = 20.0
     zoom_map = 45.0
     fig4_with_topo = False  # set True if you want station map on topo background
@@ -204,6 +204,7 @@ def run_single_timestep(mode="A", weighted=True):
             "time_str": time_str,
             "species": species,
             "units": "ppb",
+            "mode": mode,
             **meta_v,
         }
         # sectors + cumulative sectors
@@ -240,8 +241,8 @@ def run_single_timestep(mode="A", weighted=True):
         fig_cv_cum_b, ax_cv_cum_b = plot_cv_bars_sector_both(
             cum_stats_unw,
             cum_stats_w if weighted else cum_stats_unw,
-            title=f"{species} CV — cumulative sectors at {time_str}"
-        )
+            title=f"{species} CV: Sectors at {time_str} UTC for same model level" if mode=='A' else f"{species} CV: Sectors at {time_str} UTC for same altitude ASL"
+            )
         
         # plots: CV vs distance (line + bars)
         fig_cv, ax_cv = plot_cv_vs_distance(
@@ -270,8 +271,8 @@ def run_single_timestep(mode="A", weighted=True):
         fig_r1, ax_r1 = plot_ratio_bars(
             df_ratio_cum,
             xlabel="Sectors",
-            title=f"{species} {time_str}: Cumulative sector mean / center"
-        )
+            title=f"{species} {time_str} UTC: sector mean / center: Same Model Level" if mode=='A'  else f"{species} {time_str} UTC: sector mean / center: Same altitude ASL"
+             )
 
         df_ratio_dist = distance_cumulative_mean_ratio_to_center(
             df_dist=df_dist_binned,
@@ -283,7 +284,7 @@ def run_single_timestep(mode="A", weighted=True):
         fig_r2, ax_r2 = plot_ratio_bars(
             df_ratio_dist,
             xlabel="Distance < km",
-            title=f"{species} {time_str}: Cumulative distance mean / center"
+            title=f"{species} {time_str} UTC: Cumulative distance mean / center"
         )
         fig1, ax1, im1 = plot_variable_on_map(
         lats_small, lons_small, grid_ppb,
