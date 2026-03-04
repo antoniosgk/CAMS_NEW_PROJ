@@ -82,7 +82,7 @@ def save_figure(fig, out_dir, filename_base, dpi=200):
     fig.savefig(path, dpi=dpi, bbox_inches="tight")
     return path
 
-def build_meta_title(meta, kind=""):
+def build_meta_title(meta, kind="",MODE=""):
     """
     kind: optional short label like 'Map', 'Profile P–T', etc.
     """
@@ -99,9 +99,14 @@ def build_meta_title(meta, kind=""):
     )
     line3 = (
         f"Model: ({meta['model_lat']:.2f}, {meta['model_lon']:.2f}), "
-        #f"lev={meta['k_star']+1}, alt={meta['z_star_m']:.1f} m"
+        f"lev={meta['k_star_center']+1}, alt={meta['z_star_m']:.1f} m"
     )
-    return header + "\n" + line2 + "\n" + line3
+    #if MODE="A":
+        #line4=(f'Same model level for the whole area')
+    #else:
+        #line4=(f'Same altitude for the whole area')    
+    
+    return header + "\n" + line2 + "\n" + line3 + "\n" #+ line4
 
 def plot_variable_on_map(
     lats_small,

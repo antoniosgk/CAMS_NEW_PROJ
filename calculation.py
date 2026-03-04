@@ -96,23 +96,30 @@ def compute_ring_sector_masks(ii, jj, Ny, Nx, radii):
     return masks
 
 
-def sector_table(mask, lats_small, lons_small, data_arr, var_name, w_area=None):
+def sector_table(mask, lats_small, lons_small, data_arr, var_name, invalid_mask=None, w_area=None):
     """
-    Convert a mask + 2D field into a DataFrame of selected grid cells.
-    If w_area is provided, adds 'w_area' column (required for weighted stats).
+    Build a DataFrame for a given sector mask.
+
+    New:
+      - invalid_mask: 2D bool same shape as data_arr; True means invalid (below-ground)
+      - w_area: 2D weights same shape as data_arr (optional)
+      - adds columns:
+          * is_valid (True/False)
+          * w_area (if provided)
     """
     iy, ix = np.where(mask)
 
-    if np.ndim(lats_small) == 1 and np.ndim(lons_small) == 1:
-        lat_vals = np.asarray(lats_small)[iy]
-        lon_vals = np.asarray(lons_small)[ix]
+    # 1D vs 2D lat/lon
+    if lats_small.ndim == 1 and lons_small.ndim == 1:
+        lat_vals = lats_small[iy]
+        lon_vals = lons_small[ix]
     else:
-        lat_vals = np.asarray(lats_small)[iy, ix]
-        lon_vals = np.asarray(lons_small)[iy, ix]
+        lat_vals = lats_small[iy, ix]
+        lon_vals = lons_small[iy, ix]
 
     vals = np.asarray(data_arr)[iy, ix]
 
-    out = pd.DataFrame({
+    df = pd.DataFrame({
         "lat_idx": iy,
         "lon_idx": ix,
         "lat": lat_vals,
@@ -120,16 +127,28 @@ def sector_table(mask, lats_small, lons_small, data_arr, var_name, w_area=None):
         var_name: vals,
     })
 
+    if invalid_mask is not None:
+        inv = np.asarray(invalid_mask, dtype=bool)[iy, ix]
+        df["is_valid"] = ~inv
+    else:
+        df["is_valid"] = np.isfinite(pd.to_numeric(df[var_name], errors="coerce"))
+
     if w_area is not None:
-        out["w_area"] = np.asarray(w_area)[iy, ix]
+        df["w_area"] = np.asarray(w_area)[iy, ix]
 
-    return out
+    return df
 
 
-def compute_sector_tables_generic(ii, jj, lats_small, lons_small, data_arr, var_name, radii, w_area=None):
-    Ny, Nx = np.asarray(data_arr).shape
+def compute_sector_tables_generic(ii, jj, lats_small, lons_small, data_arr, var_name, radii,
+                                  invalid_mask=None, w_area=None):
+    Ny, Nx = data_arr.shape
     masks = compute_ring_sector_masks(ii, jj, Ny, Nx, radii)
-    dfs = [sector_table(m, lats_small, lons_small, data_arr, var_name, w_area=w_area) for m in masks]
+
+    dfs = [
+        sector_table(m, lats_small, lons_small, data_arr, var_name,
+                    invalid_mask=invalid_mask, w_area=w_area)
+        for m in masks
+    ]
     return dfs, masks
 
 
@@ -142,12 +161,25 @@ def cumulative_sector_masks(sector_masks):
     return out
 
 
-def compute_cumulative_sector_tables(sector_masks, lats_small, lons_small, data_arr, var_name, w_area=None):
+def compute_cumulative_sector_tables(sector_masks, lats_small, lons_small, data_arr, var_name,
+                                     invalid_mask=None, w_area=None):
     cum_masks = cumulative_sector_masks(sector_masks)
-    dfs = [sector_table(m, lats_small, lons_small, data_arr, var_name, w_area=w_area) for m in cum_masks]
+    dfs = [
+        sector_table(m, lats_small, lons_small, data_arr, var_name,
+                    invalid_mask=invalid_mask, w_area=w_area)
+        for m in cum_masks
+    ]
     return dfs, cum_masks
 
-
+def apply_mask_to_data_arr(data_arr, invalid_mask, fill_value=np.nan):
+    """
+    Returns a copy of data_arr where invalid_mask==True is replaced by fill_value.
+    data_arr: 2D array
+    invalid_mask: 2D bool array same shape
+    """
+    out = np.array(data_arr, dtype=float, copy=True)
+    out[np.asarray(invalid_mask, dtype=bool)] = fill_value
+    return out
 # -----------------------------
 # Weighted/unweighted stats
 # -----------------------------

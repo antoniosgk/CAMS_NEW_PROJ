@@ -195,7 +195,7 @@ def extract_smallbox_ppb_optionA_fixed_k(
     field = ds_species[species].values[0, k_star, i1_s:i2_s + 1, j1_s:j2_s + 1]
     grid_ppb = to_ppb_fn(field, species)
 
-    meta = {"k_star": int(k_star), "p_hPa": float(p_hPa), "z_star_m": float(z_star)}
+    meta = {"k_star_center": int(k_star), "p_hPa": float(p_hPa), "z_star_m": float(z_star)}
     return grid_ppb, meta
 
 
@@ -204,6 +204,7 @@ def extract_smallbox_ppb_optionHeight_fixed_z(
     species, station_alt_m,
     i, j, i1_s, i2_s, j1_s, j2_s,
     to_ppb_fn,
+    below_ground_margin_m=0.0,   # <-- ADD (optional)
 ):
     """
     MODE = "HEIGHT"
@@ -211,7 +212,11 @@ def extract_smallbox_ppb_optionHeight_fixed_z(
     - Take the HEIGHT z* of that central level.
     - For each small-box cell, choose k(cell) whose z(k,cell) is closest to z*.
       (so k varies spatially but targets the same height surface)
+
+    New behavior:
+    - Cells where z_target is below ground (z0_cell > z_target - margin) are masked (NaN).
     """
+
     PHIS_c = ds_orog["PHIS"].isel(time=0, lat=i, lon=j).item()
     z0_c = (PHIS_c * mp_units("m^2/s^2") / g).to("meter").magnitude
 
@@ -240,26 +245,46 @@ def extract_smallbox_ppb_optionHeight_fixed_z(
     p_2d  = p_box.reshape(nlev, ncol)
     RH_2d = RH_box.reshape(nlev, ncol)
 
-    z0_grid = surface_height_grid_m(ds_orog, i1_s, i2_s, j1_s, j2_s).reshape(ncol)
+    z0_grid_2d = surface_height_grid_m(ds_orog, i1_s, i2_s, j1_s, j2_s)  # (Ny_s, Nx_s)
+    z0_grid_1d = z0_grid_2d.reshape(ncol)
 
-    z_2d = metpy_compute_heights(p_2d, T_2d, RH=RH_2d, z0=z0_grid)
+    # --- BELOW-GROUND MASK (key fix) ---
+    # invalid if target is below ground (optionally allow small margin)
+    below_ground_1d = z0_grid_1d > (z_target - float(below_ground_margin_m))
+
+    # compute z profiles
+    z_2d = metpy_compute_heights(p_2d, T_2d, RH=RH_2d, z0=z0_grid_1d)
 
     diff = np.abs(z_2d - z_target)
     diff[~np.isfinite(diff)] = np.inf
+
+    # enforce invalid columns: never select any k there
+    diff[:, below_ground_1d] = np.inf
+
     k_grid_1d = np.argmin(diff, axis=0)  # (ncol,)
 
     # extract species at k(cell)
     sp_box = ds_species[species].values[0, :, i1_s:i2_s + 1, j1_s:j2_s + 1]  # (lev,Ny,Nx)
     sp_2d = sp_box.reshape(nlev, ncol)
     cols = np.arange(ncol)
-    sel = sp_2d[k_grid_1d, cols].reshape(Ny_s, Nx_s)
+
+    sel_1d = sp_2d[k_grid_1d, cols]  # (ncol,)
+    sel_1d = sel_1d.astype(float)
+
+    # set below-ground columns to NaN (plots white; stats ignore)
+    sel_1d[below_ground_1d] = np.nan
+
+    sel = sel_1d.reshape(Ny_s, Nx_s)
 
     grid_ppb = to_ppb_fn(sel, species)
 
     meta = {
         "k_star_center": int(k_star_c),
         "p_hPa_center": float(p_hPa_c),
-        "z_target_m": float(z_target),
+        "z_star_m": float(z_target),
         "k_grid": k_grid_1d.reshape(Ny_s, Nx_s),
+        "below_ground_mask": below_ground_1d.reshape(Ny_s, Nx_s),
+        "below_ground_n": int(np.sum(below_ground_1d)),
     }
+    print(meta)
     return grid_ppb, meta

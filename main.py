@@ -60,9 +60,9 @@ START_DT = datetime.datetime(2005, 5, 20, 2, 30)
 END_DT   = datetime.datetime(2005, 5, 20, 3, 0)
 
 # Mode works for BOTH single timestep and period
-MODE = "A"          # "A" or "HEIGHT"
+MODE = "HEIGHT"          # "A" or "HEIGHT"
 idx = 5
-cell_nums = 50
+cell_nums = 10
 dist_bins_km = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 out_dir = "/home/agkiokas/CAMS/plots/"
 
@@ -188,6 +188,7 @@ def run_single_timestep(mode="A", weighted=True):
                 i, j, i1_s, i2_s, j1_s, j2_s,
                 to_ppb_fn=to_ppb_mmr
             )
+            print(np.unique(meta_v["k_grid"]).size, meta_v["k_grid"].min(), meta_v["k_grid"].max())
         else:
             raise ValueError("mode must be 'A' or 'HEIGHT'")
 
@@ -412,7 +413,7 @@ def run_single_timestep(mode="A", weighted=True):
         ax4.legend(loc="upper right")
         ax4.set_title("Stations context map", pad=18)
         plt.show()
-
+        #HERE PUT 2 PROFILE PLOTS
     
         print("Vertical meta:", meta_v)
 
