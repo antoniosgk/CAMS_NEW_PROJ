@@ -419,58 +419,116 @@ def run_period_cumulative_sector_timeseries(
 
         center_ppb = float(grid_ppb[ii, jj])
 
-        # --- CUMULATIVE SECTORS (C1..Ck) ---
-        _, sector_masks = compute_sector_tables_generic(
-            ii, jj, lats_small, lons_small, grid_ppb, species, radii=radii,
-            w_area=w_area_small
-        )
-        cum_dfs, _ = compute_cumulative_sector_tables(
-            sector_masks, lats_small, lons_small, grid_ppb, species,
-            w_area=w_area_small
-        )
+        invalid_mask = meta_v.get("below_ground_mask", None)  # 2D bool (Ny_s, Nx_s) in HEIGHT mode; None in A mode
 
-        for k, df_c in enumerate(cum_dfs, start=1):
-            st = sector_stats_weighted(df_c, species, w_col="w_area") if weighted else sector_stats_unweighted(df_c, species)
-            rows.append({
-                "station": station_name,
-                "date": date,
-                "time": time,
-                "timestamp": f"{date} {time}",
-                "mode": mode.upper(),
-                "sector_type": "CUM",
-                "sector": f"C{k}",
-                "radius": radii[k - 1],
-                "k_star_center": int(k_center),
-                "z_target_m": float(z_target),
-                "center_ppb": center_ppb,
-                **st,
-            })
+# --- CUMULATIVE SECTORS (C1..Ck) ---
+    _, sector_masks = compute_sector_tables_generic(
+    ii, jj, lats_small, lons_small, grid_ppb, species, radii=radii,
+    invalid_mask=invalid_mask,
+    w_area=w_area_small
+)
+
+    cum_dfs, _ = compute_cumulative_sector_tables(
+    sector_masks, lats_small, lons_small, grid_ppb, species,
+    invalid_mask=invalid_mask,
+    w_area=w_area_small
+)
+
+    for k, df_c in enumerate(cum_dfs, start=1):
+
+    # counts
+        n_total = int(len(df_c))
+        n_valid = int(df_c["is_valid"].sum()) if "is_valid" in df_c.columns else int(np.isfinite(df_c[species]).sum())
+        n_excluded = int(n_total - n_valid)
+        frac_excluded = float(n_excluded / n_total) if n_total > 0 else np.nan
+
+    # stats (NaNs already excluded by your stats fns)
+        st = sector_stats_weighted(df_c, species, w_col="w_area") if weighted else sector_stats_unweighted(df_c, species)
+
+        rows.append({
+        "station": station_name,
+        "date": date,
+        "time": time,
+        "timestamp": f"{date} {time}",
+        "mode": mode.upper(),
+        "sector_type": "CUM",
+        "sector": f"C{k}",
+        "radius": radii[k - 1],
+        "k_star_center": int(k_center),
+        "z_target_m": float(z_target),
+        "center_ppb": center_ppb,
+
+        # NEW: validity accounting
+        "n_total": n_total,
+        "n_valid": n_valid,
+        "n_excluded": n_excluded,
+        "frac_excluded": frac_excluded,
+
+        **st,
+    })
 
         # --- DISTANCE CUMULATIVE ONLY (D≤...) ---
         df_dist = build_distance_dataframe(
-            lats_small, lons_small, grid_ppb, lat_s, lon_s,
-            var_name=species, w_area=w_area_small
-        )
+        lats_small, lons_small, grid_ppb, lat_s, lon_s,
+        var_name=species, w_area=w_area_small
+)
 
-        for dmax in radii_km:
-            df_cum = df_dist[df_dist["distance_km"] <= float(dmax)]
-            if df_cum.empty:
-                continue
-            st = sector_stats_weighted(df_cum, species, w_col="w_area") if weighted else sector_stats_unweighted(df_cum, species)
-            rows.append({
-                "station": station_name,
-                "date": date,
-                "time": time,
-                "timestamp": f"{date} {time}",
-                "mode": mode.upper(),
-                "sector_type": "DISTCUM",
-                "sector": f"D≤{int(dmax)}",
-                "radius": float(dmax),
-                "k_star_center": int(k_center),
-                "z_target_m": float(z_target),
-                "center_ppb": center_ppb,
-                **st,
-            })
+# Add validity to df_dist using invalid_mask (if any)
+    if invalid_mask is not None:
+        if lats_small.ndim == 1 and lons_small.ndim == 1:
+        # build indices by meshgrid
+            Ny_s = len(lats_small)
+            Nx_s = len(lons_small)
+            iy, ix = np.divmod(np.arange(Ny_s * Nx_s), Nx_s)
+        else:
+        # rare case; for 2D lat/lon you likely still have regular data_arr indexing
+            Ny_s, Nx_s = invalid_mask.shape
+            iy, ix = np.divmod(np.arange(Ny_s * Nx_s), Nx_s)
+
+        inv_flat = np.asarray(invalid_mask, dtype=bool).ravel()
+        df_dist["is_valid"] = ~inv_flat
+    else:
+        df_dist["is_valid"] = np.isfinite(pd.to_numeric(df_dist[species], errors="coerce"))
+
+    for dmax in radii_km:
+        df_cum = df_dist[df_dist["distance_km"] <= float(dmax)].copy()
+        if df_cum.empty:
+            continue
+
+        n_total = int(len(df_cum))
+        n_valid = int(df_cum["is_valid"].sum())
+        n_excluded = int(n_total - n_valid)
+        frac_excluded = float(n_excluded / n_total) if n_total > 0 else np.nan
+
+    # stats should use only valid rows
+        df_valid = df_cum[df_cum["is_valid"]].copy()
+
+        if weighted:
+            st = sector_stats_weighted(df_valid, species, w_col="w_area")
+        else:
+            st = sector_stats_unweighted(df_valid, species)
+
+        rows.append({
+        "station": station_name,
+        "date": date,
+        "time": time,
+        "timestamp": f"{date} {time}",
+        "mode": mode.upper(),
+        "sector_type": "DISTCUM",
+        "sector": f"D≤{int(dmax)}",
+        "radius": float(dmax),
+        "k_star_center": int(k_center),
+        "z_target_m": float(z_target),
+        "center_ppb": center_ppb,
+
+        # NEW: validity accounting
+        "n_total": n_total,
+        "n_valid": n_valid,
+        "n_excluded": n_excluded,
+        "frac_excluded": frac_excluded,
+
+        **st,
+    })
 
         for ds in (ds_species, ds_T, ds_PL, ds_RH):
             ds.close()

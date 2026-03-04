@@ -115,7 +115,7 @@ def run_single_timestep(mode="A", weighted=True):
       species_file, T_file, pl_file, RH_file, orog_file
     """
     # ---- local plotting settings (same as your old main) ----
-    d_zoom_species = 3
+    d_zoom_species = 2.0
     d_zoom_topo = 20.0
     zoom_map = 45.0
     fig4_with_topo = False  # set True if you want station map on topo background
