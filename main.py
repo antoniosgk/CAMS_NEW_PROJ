@@ -44,7 +44,8 @@ from plots import (
     plot_ratio_bars,
     plot_cum_sector_ratio_timeseries,
     plot_cum_distance_ratio_timeseries,
-    plot_variable_on_map,plot_rectangles
+    plot_variable_on_map,plot_rectangles,
+    plot_cum_sector_cv_timeseries
 )
 
 from io_netcdf import df30min_to_netcdf_station_species
@@ -53,14 +54,14 @@ from io_netcdf import df30min_to_netcdf_station_species
 # -----------------------
 # USER SETTINGS
 # -----------------------
-RUN_PERIOD = False
+RUN_PERIOD = True
 
 # Period settings (only used when RUN_PERIOD=True)
-START_DT = datetime.datetime(2005, 5, 20, 2, 30)
+START_DT = datetime.datetime(2005, 5, 20, 1, 30)  #yyyy,m,d,hr,min
 END_DT   = datetime.datetime(2005, 5, 20, 3, 0)
 
 # Mode works for BOTH single timestep and period
-MODE = "HEIGHT"          # "A" or "HEIGHT"
+MODE = "A"          # "A" or "HEIGHT"
 idx = 5
 cell_nums = 10
 dist_bins_km = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
@@ -173,6 +174,13 @@ def run_single_timestep(mode="A", weighted=True):
 
         lats_bg = lats[i1_bg:i2_bg + 1]
         lons_bg = lons[j1_bg:j2_bg + 1]
+        grid_ppb_ref, meta_ref = extract_smallbox_ppb_optionA_fixed_k(
+         ds_species, ds_T, ds_PL, ds_RH, ds_orog,species, alt_s,
+         i, j, i1_s, i2_s, j1_s, j2_s,to_ppb_fn=to_ppb_mmr)
+
+       # Define our global plot limits
+        vmin_plot = meta_ref['min']
+        vmax_plot = meta_ref['max']
         # build ppb field (small box) using chosen vertical mode
         if str(mode).upper() == "A":
             grid_ppb, meta_v = extract_smallbox_ppb_optionA_fixed_k(
@@ -188,10 +196,11 @@ def run_single_timestep(mode="A", weighted=True):
                 i, j, i1_s, i2_s, j1_s, j2_s,
                 to_ppb_fn=to_ppb_mmr
             )
+            
             print(np.unique(meta_v["k_grid"]).size, meta_v["k_grid"].min(), meta_v["k_grid"].max())
         else:
             raise ValueError("mode must be 'A' or 'HEIGHT'")
-
+            
         time_str = _time_str_from_species_ds(ds_species, species)
         center_value = float(grid_ppb[ii, jj])
         meta = {
@@ -286,11 +295,15 @@ def run_single_timestep(mode="A", weighted=True):
             xlabel="Distance < km",
             title=f"{species} {time_str} UTC: Cumulative distance mean / center"
         )
+
+        vmin = np.nanmin(vmin_plot)
+        vmax = np.nanmax(vmax_plot)
+        
         fig1, ax1, im1 = plot_variable_on_map(
         lats_small, lons_small, grid_ppb,
          lon_s, lat_s,
         units="ppb",
-        species_name=species,
+        species_name=species,vmin=vmin,vmax=vmax,
         d=d_zoom_species,
         time_str=time_str,
         meta=meta, z_orog_m=z_orog_bg,          
@@ -308,10 +321,10 @@ def run_single_timestep(mode="A", weighted=True):
         d=d_zoom_species,
         time_str=time_str,
          meta=meta,
-        z_orog_m=z_orog_bg,
+        z_orog_m=z_orog_bg,vmin=vmin,vmax=vmax,
         lats_terrain=lats_bg,
-        lons_terrain=lons_bg,plot_orography=False
-)
+        lons_terrain=lons_bg,plot_orography=False)
+
         plot_rectangles(ax2, lats_small, lons_small, ii, jj, im2, meta=meta,radii=radii)
         plt.show()
          # FIG 3 — Topography-only map
@@ -429,13 +442,17 @@ def run_single_timestep(mode="A", weighted=True):
 # -----------------------
 # 2) TIME INTERVAL
 # -----------------------
-def run_time_interval(mode="A", weighted=True):
+def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_minutes=30):
     """
     Period analysis:
       - runs run_period_cumulative_sector_timeseries
       - creates ratio time-series plots
       - saves CSV + summary + NetCDF
     """
+    if start_dt is None:
+        start_dt = START_DT
+    if end_dt is None:
+        end_dt = END_DT
     stations = load_stations(stations_path)
     station = select_station(stations, idx)
 
@@ -446,7 +463,7 @@ def run_time_interval(mode="A", weighted=True):
     # infer model cell lat/lon from first existing species file in period
     model_lat = model_lon = None
     found = False
-    for d0, t0 in iter_timestamps(START_DT, END_DT, 30):
+    for d0, t0 in iter_timestamps(start_dt, end_dt, 30):
         sp0, _, _, _, _ = build_paths(base_path, product, species, d0, t0)
         try:
             ds0 = xr.open_dataset(sp0)
@@ -491,7 +508,16 @@ def run_time_interval(mode="A", weighted=True):
         title=f"{species}: CUM distance mean / center ({name} {mode})"
     )
     fig2.savefig(f"{out_dir}/{name}_{species}_{mode}_ts_ratio_DISTCUM.png", dpi=200)
-
+    # CV time-series per sector (colors match Reds palette used in rectangles/bars)
+    fig_cv_ts, ax_cv_ts = plot_cum_sector_cv_timeseries(
+    df_30min,
+    weighted=weighted,
+    title=f"{species}: CV over time by cumulative sector ({name} {mode})",
+    cmap_name="Reds",
+    start=0.85,
+    end=0.25,
+)
+    fig_cv_ts.savefig(f"{out_dir}/{name}_{species}_{mode}_ts_CV_CUM.png", dpi=200)
     plt.show()
 
     # save outputs
@@ -519,7 +545,7 @@ def run_time_interval(mode="A", weighted=True):
 
 def main():
     if RUN_PERIOD:
-        run_time_interval(mode=MODE, weighted=True)
+        run_time_interval(mode=MODE, weighted=True,start_dt=START_DT,end_dt=END_DT,step_minutes=30)
     else:
         run_single_timestep(mode=MODE, weighted=True)
 

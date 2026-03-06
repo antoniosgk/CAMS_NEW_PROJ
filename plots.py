@@ -27,6 +27,19 @@ def _gradual_reds(n, cmap_name="Reds", start=0.85, end=0.25):
     vals = np.linspace(start, end, n)
     return [cmap(v) for v in vals]
 
+def get_sector_colormap(n_sectors, cmap_name="viridis"):
+    """
+    Returns a consistent list of colors for sectors.
+    Used everywhere (rectangles, sector CV plots, ratio plots).
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    cmap = plt.get_cmap(cmap_name)
+
+    colors = [cmap(i) for i in np.linspace(0, 1, n_sectors)]
+
+    return colors, cmap
 
 def sector_color_mapping(labels=None, n=None, cmap_name="Reds",
                          start=0.85, end=0.25, base0_color="black"):
@@ -133,7 +146,7 @@ def plot_variable_on_map(
     z_orog_m=None,
     terrain_alpha=0.5,
     field_alpha=0.8,
-    add_orog_contours=True,
+    add_orog_contours=True,cmap="viridis",vmin=None,vmax=None,
     plot_species=True,plot_orography=False
     ):
     
@@ -206,17 +219,22 @@ def plot_variable_on_map(
     data_arr = np.asarray(data_arr, dtype=float)
 
     
+    # ✅ Use external vmin/vmax if provided; otherwise compute from this data_arr
+    if vmin is None:
+        vmin = float(np.nanmin(data_arr))
+    if vmax is None:
+        vmax = float(np.nanmax(data_arr))
 
-    vmin = float(np.nanmin(data_arr))
-    vmax = float(np.nanmax(data_arr))
     norm = Normalize(vmin=vmin, vmax=vmax)
 
     im = None
     if plot_species:
       LON_S, LAT_S = np.meshgrid(lons_small, lats_small)
+      cmap_obj = plt.get_cmap(cmap).copy()
+      cmap_obj.set_bad("white")   #  HEIGHT-mode NaNs (below-ground) become white
       im = ax.pcolormesh(
         LON_S, LAT_S, data_arr,
-        cmap="viridis",
+        cmap=cmap_obj,
         shading="auto",
         norm=norm,
         transform=ccrs.PlateCarree(),
@@ -459,7 +477,7 @@ def plot_cv_cumulative_sectors(stats_unw, stats_w, title=None, ax=None):
     ax.set_xticks(x)
     ax.set_xticklabels([f"{k}" for k in x])
     ax.grid(True, linestyle="--", alpha=0.4)
-    #ax.set_ylim(0.0,0.069)
+    #ax.set_ylim(0.0,20)
     ax.legend()
 
     if title:
@@ -831,7 +849,7 @@ def _ensure_datetime(df, date_col="date", time_col="time"):
 
 
 def plot_cum_sector_ratio_timeseries(
-    df_per_timestep,
+    df_per_timestep,cmap_name="Reds",start=0.85,end=0.25,
     ax=None,
     title=None,
     ylabel="Cumulative sector mean / center",
@@ -851,7 +869,7 @@ def plot_cum_sector_ratio_timeseries(
 
     df["datetime"] = _ensure_datetime(df)
     df = df[df["datetime"].notna()].copy()
-
+    '''
     df["mean"] = pd.to_numeric(df["mean_w"], errors="coerce")
     df["center_ppb"] = pd.to_numeric(df["center_ppb"], errors="coerce")
 
@@ -867,11 +885,36 @@ def plot_cum_sector_ratio_timeseries(
 
     for col in wide.columns:
         ax.plot(wide.index, wide[col].values, label=str(col))
+    '''
+    mean_col = "mean_w" if "mean_w" in df.columns else "mean"
+    df["mean_val"] = pd.to_numeric(df[mean_col], errors="coerce")
+    df["center_ppb"] = pd.to_numeric(df["center_ppb"], errors="coerce")
 
+    df = df[np.isfinite(df["mean_val"]) & np.isfinite(df["center_ppb"]) & (df["center_ppb"] != 0)].copy()
+    df["ratio"] = df["mean_val"] / df["center_ppb"]
+
+    wide = df.pivot_table(index="datetime", columns="sector", values="ratio", aggfunc="mean").sort_index()
+
+    def _cnum(s):
+        try:
+            return int(str(s).replace("C", ""))
+        except Exception:
+            return 10**9
+
+    cols = sorted(list(wide.columns), key=_cnum)
+    wide = wide.reindex(cols, axis=1)
+
+    mapping = sector_color_mapping(labels=cols, cmap_name=cmap_name, start=start, end=end, base0_color="black")
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+    for col in wide.columns:
+        ax.plot(wide.index, wide[col].values, label=str(col), color=mapping[col], linewidth=2.0)
     ax.axhline(1.0, linestyle="--", linewidth=1)
     ax.set_ylabel(ylabel)
     ax.set_xlabel("Time")
-    ax.set_ylim(0.993,1.005)
+    ax.set_ylim(0.90,1.1)
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     ax.legend(title="Cumulative sector", ncol=2)
     if title:
@@ -884,7 +927,7 @@ def plot_cum_distance_ratio_timeseries(
     df_per_timestep,
     dist_bins_km,
     ax=None,
-    title=None,
+    title=None,cmap="Reds",start=0.85,end=0.25,
     ylabel="Cumulative distance mean / center",
 ):
     """
@@ -974,6 +1017,96 @@ def plot_cum_distance_ratio_timeseries(
     ax.set_ylim(0.993,1.005)
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     ax.legend(title="Cumulative distance", ncol=2)
+    if title:
+        ax.set_title(title)
+
+    return fig, ax
+def plot_cum_sector_cv_timeseries(
+    df_per_timestep,
+    ax=None,
+    title=None,
+    ylabel="CV (%)",
+    weighted=True,
+    cmap_name="Reds",
+    start=0.85,
+    end=0.25,
+):
+    """
+    Time-series line plot:
+      - one line per cumulative sector (C1, C2, ...)
+      - x axis: time
+      - y axis: CV (%) (cv_w if weighted else cv)
+    Colors are the SAME Reds palette used by plot_rectangles/plot_ratio_bars.
+    """
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
+    df = df_per_timestep.copy()
+
+    # keep only cumulative sectors
+    df = df[df["sector_type"] == "CUM"].copy()
+    if df.empty:
+        raise ValueError("No 'CUM' rows found in df_per_timestep.")
+
+    # datetime
+    df["datetime"] = _ensure_datetime(df)
+    df = df[df["datetime"].notna()].copy()
+
+    # choose CV column
+    cv_col = "cv_w" if weighted else "cv"
+    if cv_col not in df.columns:
+        raise ValueError(f"Missing '{cv_col}' in df_per_timestep.")
+
+    df[cv_col] = pd.to_numeric(df[cv_col], errors="coerce")
+    df = df[np.isfinite(df[cv_col])].copy()
+
+    # pivot: time x sector
+    wide = df.pivot_table(index="datetime", columns="sector", values=cv_col, aggfunc="mean").sort_index()
+
+    # convert to percent
+    wide = wide.astype(float) * 100.0
+
+    # enforce sector order C1..Ck
+    def _cnum(s):
+        try:
+            return int(str(s).replace("C", ""))
+        except Exception:
+            return 10**9
+
+    cols = sorted(list(wide.columns), key=_cnum)
+    wide = wide.reindex(cols, axis=1)
+
+    # colors: same Reds scheme as rectangles/bars
+    mapping = sector_color_mapping(
+        labels=cols,
+        cmap_name=cmap_name,
+        start=start,
+        end=end,
+        base0_color="black",
+    )
+
+    # plot
+    if ax is None:
+        fig, ax = plt.subplots()
+    else:
+        fig = ax.figure
+
+    for col in wide.columns:
+        ax.plot(
+            wide.index,
+            wide[col].values,
+            label=str(col),
+            color=mapping[col],
+            linewidth=2.0,
+        )
+
+    ax.set_ylabel(ylabel)
+    ax.set_xlabel("Time")
+    ax.grid(True, axis="y", linestyle="--", alpha=0.4)
+    ax.legend(title="Cumulative sector", ncol=2)
+
     if title:
         ax.set_title(title)
 

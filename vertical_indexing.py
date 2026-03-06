@@ -194,8 +194,9 @@ def extract_smallbox_ppb_optionA_fixed_k(
 
     field = ds_species[species].values[0, k_star, i1_s:i2_s + 1, j1_s:j2_s + 1]
     grid_ppb = to_ppb_fn(field, species)
-
-    meta = {"k_star_center": int(k_star), "p_hPa": float(p_hPa), "z_star_m": float(z_star)}
+    min=np.nanmin(grid_ppb)
+    max=np.nanmax(grid_ppb)
+    meta = {"k_star_center": int(k_star), "p_hPa": float(p_hPa), "z_star_m": float(z_star),"min": np.nanmin(grid_ppb),"max":np.nanmax(grid_ppb)}
     return grid_ppb, meta
 
 
@@ -284,7 +285,7 @@ def extract_smallbox_ppb_optionHeight_fixed_z(
         "z_star_m": float(z_target),
         "k_grid": k_grid_1d.reshape(Ny_s, Nx_s),
         "below_ground_mask": below_ground_1d.reshape(Ny_s, Nx_s),
-        "below_ground_n": int(np.sum(below_ground_1d)),
+        "below_ground_n": int(np.sum(below_ground_1d))
     }
     print(meta)
     return grid_ppb, meta

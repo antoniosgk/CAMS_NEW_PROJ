@@ -402,7 +402,7 @@ def run_period_cumulative_sector_timeseries(
                 to_ppb_fn=to_ppb_mmr,
             )
             z_target = meta_v["z_star_m"]
-            k_center = meta_v["k_star"]
+            k_center = meta_v["k_star_center"]
         elif mode.upper() == "HEIGHT":
             grid_ppb, meta_v = extract_smallbox_ppb_optionHeight_fixed_z(
                 ds_species, ds_T, ds_PL, ds_RH, ds_orog,
