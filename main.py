@@ -8,6 +8,7 @@ import datetime
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import os
+import time
 
 from file_utils import (
     base_path, product, species, stations_path,
@@ -58,7 +59,7 @@ RUN_PERIOD = True
 
 # Period settings (only used when RUN_PERIOD=True)
 START_DT = datetime.datetime(2005, 5, 20, 0, 0)  #yyyy,m,d,hr,min
-END_DT   = datetime.datetime(2005, 5, 20, 2, 00)
+END_DT   = datetime.datetime(2005, 5, 21, 0, 00)
 print("START_DT:", START_DT)
 print("END_DT:", END_DT)
 print("Generated timestamps:", list(iter_timestamps(START_DT, END_DT, 30)))
@@ -103,7 +104,7 @@ def _get_time_str(ds_species):
     tval = ds_species[species]["time"].values[0]
     return pd.to_datetime(tval).strftime("%Y-%m-%d %H:%M")
 
-
+#start_time = time.time()
 # -----------------------
 # 1) SINGLE TIMESTEP
 # -----------------------
@@ -484,7 +485,7 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
         raise FileNotFoundError("No species files found in the requested period.")
     ts = list(iter_timestamps(START_DT, END_DT, 30))
     print("Generated timestamps:", ts)
-
+    '''
     for (d0, t0) in ts:
         spf, Tf, PLf, RHf, orogf = build_paths(base_path, product, species, d0, t0)
         print(d0, t0, "->", str(spf), "exists:", os.path.exists(spf))
@@ -494,6 +495,7 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
         print("  PL  exists:", os.path.exists(PLf),  PLf)
         print("  RH  exists:", os.path.exists(RHf),  RHf)
         print("  orog exists:", os.path.exists(orogf),orogf)
+        '''
     df_30min, df_summary = run_period_cumulative_sector_timeseries(
         base_path=base_path,
         product=product,
@@ -561,9 +563,17 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
 
 def main():
     if RUN_PERIOD:
+        start_time = time.time()
         run_time_interval(mode=MODE, weighted=True,start_dt=START_DT,end_dt=END_DT,step_minutes=30)
+        end_time = time.time()
+        execution_time = end_time - start_time
+        print(f"Execution time: {execution_time:.4f} seconds")
     else:
+        start_time = time.time()
         run_single_timestep(mode=MODE, weighted=True)
+        end_time = time.time()
+        execution_time = end_time - start_time
+        print(f"Execution time: {execution_time:.4f} seconds")
 
 
 if __name__ == "__main__":

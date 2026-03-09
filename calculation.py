@@ -469,7 +469,7 @@ def run_period_cumulative_sector_timeseries(
                 "frac_excluded": frac_excluded,
                 **st,
             })
-
+        '''
         # -----------------------------
         # DISTANCE CUMULATIVE (D≤...)
         # -----------------------------
@@ -517,7 +517,7 @@ def run_period_cumulative_sector_timeseries(
                 "frac_excluded": frac_excluded,
                 **st,
             })
-
+'''
         # close per-timestep files
         for ds in (ds_species, ds_T, ds_PL, ds_RH):
             ds.close()

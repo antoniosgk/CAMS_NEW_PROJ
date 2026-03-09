@@ -913,7 +913,7 @@ def plot_cum_sector_ratio_timeseries(
     ax.axhline(1.0, linestyle="--", linewidth=1)
     ax.set_ylabel(ylabel)
     ax.set_xlabel("Time")
-    ax.set_ylim(0.90,1.1)
+    plt.xticks(rotation=45)
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     ax.legend(title="Cumulative sector", ncol=2)
     if title:
@@ -1014,7 +1014,7 @@ def plot_cum_distance_ratio_timeseries(
     ax.axhline(1.0, linestyle="--", linewidth=1)
     ax.set_ylabel(ylabel)
     ax.set_xlabel("Time")
-    ax.set_ylim(0.993,1.005)
+    plt.xticks(rotation=45)
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     ax.legend(title="Cumulative distance", ncol=2)
     if title:
@@ -1107,6 +1107,7 @@ def plot_cum_sector_cv_timeseries(
     #ax.set_xlim()
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     ax.legend(title="Cumulative sector", ncol=2)
+    plt.xticks(rotation=45)
 
     if title:
         ax.set_title(title)
