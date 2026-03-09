@@ -55,7 +55,7 @@ from io_netcdf import df30min_to_netcdf_station_species
 # -----------------------
 # USER SETTINGS
 # -----------------------
-RUN_PERIOD = True
+RUN_PERIOD = False
 
 # Period settings (only used when RUN_PERIOD=True)
 START_DT = datetime.datetime(2005, 5, 20, 0, 0)  #yyyy,m,d,hr,min
@@ -65,7 +65,7 @@ print("END_DT:", END_DT)
 print("Generated timestamps:", list(iter_timestamps(START_DT, END_DT, 30)))
 # Mode works for BOTH single timestep and period
 MODE = "A"          # "A" or "HEIGHT"
-idx = 5
+idx = 1467
 cell_nums = 10
 dist_bins_km = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 out_dir = "/home/agkiokas/CAMS/plots/"
