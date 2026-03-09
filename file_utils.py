@@ -1,6 +1,6 @@
 # file_utils.py
 from pathlib import Path
-from datetime import datetime, timedelta
+import datetime as dt
 import xarray as xr
 
 # ---- Your existing config constants (keep if you want) ----
@@ -10,7 +10,7 @@ base_path = "/mnt/store01/agkiokas/CAMS/inst/subsets"
 product = "inst3d"
 species = "O3"
 date = "20050520"
-time = "0300"
+time = "0600"
 
 species_file = Path(f"{base_path}/{species}/{product}_{species}_{date}_{time}.nc4")
 pl_file      = Path(f"{base_path}/PL/{product}_PL_{date}_{time}.nc4")
@@ -36,16 +36,19 @@ def build_paths(base_path: str, product: str, species: str, date: str, time: str
     return sp, T, PL, RH, orog
 
 
-def iter_timestamps(start_dt: datetime, end_dt: datetime, step_minutes: int = 30):
-    """
-    Yield (date_str, time_str) every step_minutes from start_dt to end_dt inclusive.
-    date_str: YYYYMMDD
-    time_str: HHMM
-    """
-    dt = start_dt
-    while dt <= end_dt:
-        yield dt.strftime("%Y%m%d"), dt.strftime("%H%M")
-        dt += timedelta(minutes=step_minutes)
+def iter_timestamps(start_dt, end_dt, step_minutes):
+    if not isinstance(start_dt, dt.datetime) or not isinstance(end_dt, dt.datetime):
+        raise TypeError(f"start_dt/end_dt must be datetime.datetime, got {type(start_dt)} / {type(end_dt)}")
+
+    if start_dt > end_dt:
+        raise ValueError(f"start_dt > end_dt: {start_dt} > {end_dt}")
+
+    step = dt.timedelta(minutes=int(step_minutes))
+    cur = start_dt
+
+    while cur <= end_dt:   # inclusive
+        yield cur.strftime("%Y%m%d"), cur.strftime("%H%M")
+        cur += step
 
 
 class OrogCache:

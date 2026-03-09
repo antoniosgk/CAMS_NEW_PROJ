@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import datetime
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-
+import os
 
 from file_utils import (
     base_path, product, species, stations_path,
@@ -57,9 +57,11 @@ from io_netcdf import df30min_to_netcdf_station_species
 RUN_PERIOD = True
 
 # Period settings (only used when RUN_PERIOD=True)
-START_DT = datetime.datetime(2005, 5, 20, 1, 30)  #yyyy,m,d,hr,min
-END_DT   = datetime.datetime(2005, 5, 20, 3, 0)
-
+START_DT = datetime.datetime(2005, 5, 20, 0, 0)  #yyyy,m,d,hr,min
+END_DT   = datetime.datetime(2005, 5, 20, 2, 00)
+print("START_DT:", START_DT)
+print("END_DT:", END_DT)
+print("Generated timestamps:", list(iter_timestamps(START_DT, END_DT, 30)))
 # Mode works for BOTH single timestep and period
 MODE = "A"          # "A" or "HEIGHT"
 idx = 5
@@ -463,7 +465,7 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
     # infer model cell lat/lon from first existing species file in period
     model_lat = model_lon = None
     found = False
-    for d0, t0 in iter_timestamps(start_dt, end_dt, 30):
+    for d0, t0 in iter_timestamps(start_dt, end_dt, step_minutes):
         sp0, _, _, _, _ = build_paths(base_path, product, species, d0, t0)
         try:
             ds0 = xr.open_dataset(sp0)
@@ -480,7 +482,18 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
 
     if not found:
         raise FileNotFoundError("No species files found in the requested period.")
+    ts = list(iter_timestamps(START_DT, END_DT, 30))
+    print("Generated timestamps:", ts)
 
+    for (d0, t0) in ts:
+        spf, Tf, PLf, RHf, orogf = build_paths(base_path, product, species, d0, t0)
+        print(d0, t0, "->", str(spf), "exists:", os.path.exists(spf))
+        print(f"\n{d0} {t0}")
+        print("  sp  exists:", os.path.exists(spf),  spf)
+        print("  T   exists:", os.path.exists(Tf),   Tf)
+        print("  PL  exists:", os.path.exists(PLf),  PLf)
+        print("  RH  exists:", os.path.exists(RHf),  RHf)
+        print("  orog exists:", os.path.exists(orogf),orogf)
     df_30min, df_summary = run_period_cumulative_sector_timeseries(
         base_path=base_path,
         product=product,
@@ -491,23 +504,24 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
         cell_nums=cell_nums,
         radii_km=dist_bins_km,
         mode=mode,
-        step_minutes=30,
+        step_minutes=step_minutes,
         weighted=weighted
     )
 
     # time-series ratio plots
     fig1, ax1 = plot_cum_sector_ratio_timeseries(
-        df_30min,
+        df_30min,xlim=(start_dt,end_dt),
         title=f"{species}: CUM sector mean / center ({name} {mode})"
     )
     fig1.savefig(f"{out_dir}/{name}_{species}_{mode}_ts_ratio_CUM.png", dpi=200)
-
+    '''
     fig2, ax2 = plot_cum_distance_ratio_timeseries(
         df_30min,
-        dist_bins_km=dist_bins_km,
+        dist_bins_km=dist_bins_km,xlim=(start_dt,end_dt),
         title=f"{species}: CUM distance mean / center ({name} {mode})"
     )
     fig2.savefig(f"{out_dir}/{name}_{species}_{mode}_ts_ratio_DISTCUM.png", dpi=200)
+    '''
     # CV time-series per sector (colors match Reds palette used in rectangles/bars)
     fig_cv_ts, ax_cv_ts = plot_cum_sector_cv_timeseries(
     df_30min,
@@ -515,11 +529,11 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
     title=f"{species}: CV over time by cumulative sector ({name} {mode})",
     cmap_name="Reds",
     start=0.85,
-    end=0.25,
+    end=0.25,xlim=(start_dt,end_dt)
 )
     fig_cv_ts.savefig(f"{out_dir}/{name}_{species}_{mode}_ts_CV_CUM.png", dpi=200)
     plt.show()
-
+    
     # save outputs
     out_csv = f"{out_dir}/{name}_{species}_{mode}_30min.csv"
     out_sum = f"{out_dir}/{name}_{species}_{mode}_summary.csv"
@@ -527,7 +541,8 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
 
     df_30min.to_csv(out_csv, index=False)
     df_summary.to_csv(out_sum, index=False)
-
+    print(df_30min)
+    '''
     ds_out = df30min_to_netcdf_station_species(
         df_30min=df_30min,
         station_dict=station,
@@ -538,9 +553,10 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
         mode=mode,
         weighted=weighted
     )
+    '''
     print("Saved:", out_csv)
     print("Saved:", out_sum)
-    print("Wrote:", out_nc)
+    #print("Wrote:", out_nc)
 
 
 def main():

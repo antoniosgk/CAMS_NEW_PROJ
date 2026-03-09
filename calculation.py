@@ -312,21 +312,14 @@ def run_period_cumulative_sector_timeseries(
     station,
     start_dt, end_dt,
     cell_nums,
-    radii_km,             # cumulative distance thresholds, e.g. [10,20,50,100]
-    mode="A",             # "A" or "HEIGHT"
+    radii_km,
+    mode="A",
     step_minutes=30,
     weighted=True
 ):
-    """
-    Output per timestep:
-      - sector_type == "CUM": sectors C1..Ck (cumulative rings)
-      - sector_type == "DISTCUM": sectors D≤10, D≤20, ... (cumulative distance)
-
-    Weighted=True:
-      - adds w_area_small once (from lats_small/lons_small)
-      - uses sector_stats_weighted -> mean_w/std_w/cv_w/...
-    """
-    import xarray as xr  # local import ok
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
 
     lat_s = float(station["Latitude"])
     lon_s = float(station["Longitude"])
@@ -358,11 +351,12 @@ def run_period_cumulative_sector_timeseries(
     # small box coords
     lats_small = lats[i1_s:i2_s + 1]
     lons_small = lons[j1_s:j2_s + 1]
-
     radii = list(range(1, cell_nums + 1))
 
-    # ✅ IMPORTANT: compute weights only AFTER lats_small/lons_small exist
-    w_area_small = compute_w_area_small(lats_small, lons_small, earth_radius_km=EARTH_RADIUS_KM) if weighted else None
+    # weights
+    w_area_small = compute_w_area_small(
+        lats_small, lons_small, earth_radius_km=EARTH_RADIUS_KM
+    ) if weighted else None
 
     # sanitize radii_km thresholds
     radii_km = np.asarray(radii_km, dtype=float)
@@ -373,7 +367,14 @@ def run_period_cumulative_sector_timeseries(
     orog_cache = OrogCache()
     rows = []
 
+    # ==============================
+    # MAIN LOOP OVER TIMESTAMPS
+    # ==============================
     for date, time in iter_timestamps(start_dt, end_dt, step_minutes):
+        # normalize formatting early
+        date = str(date).zfill(8)
+        time = str(time).zfill(4)
+
         spf, Tf, PLf, RHf, orogf = build_paths(base_path, product, species, date, time)
 
         ds_species = ds_T = ds_PL = ds_RH = None
@@ -393,7 +394,7 @@ def run_period_cumulative_sector_timeseries(
 
         ds_orog = orog_cache.get(orogf)
 
-        # --- vertical selection: build 2D ppb grid in the small box ---
+        # --- build 2D ppb grid in the small box ---
         if mode.upper() == "A":
             grid_ppb, meta_v = extract_smallbox_ppb_optionA_fixed_k(
                 ds_species, ds_T, ds_PL, ds_RH, ds_orog,
@@ -401,8 +402,6 @@ def run_period_cumulative_sector_timeseries(
                 i, j, i1_s, i2_s, j1_s, j2_s,
                 to_ppb_fn=to_ppb_mmr,
             )
-            z_target = meta_v["z_star_m"]
-            k_center = meta_v["k_star_center"]
         elif mode.upper() == "HEIGHT":
             grid_ppb, meta_v = extract_smallbox_ppb_optionHeight_fixed_z(
                 ds_species, ds_T, ds_PL, ds_RH, ds_orog,
@@ -410,126 +409,116 @@ def run_period_cumulative_sector_timeseries(
                 i, j, i1_s, i2_s, j1_s, j2_s,
                 to_ppb_fn=to_ppb_mmr,
             )
-            z_target = meta_v["z_target_m"]
-            k_center = meta_v["k_star_center"]
         else:
             for ds in (ds_species, ds_T, ds_PL, ds_RH):
                 ds.close()
             raise ValueError("mode must be 'A' or 'HEIGHT'")
 
+        # robust meta extraction (covers slight naming differences)
+        k_center = meta_v.get("k_star_center", meta_v.get("k_star", None))
+        if k_center is None:
+            # last resort: keep NaN but don't crash
+            k_center = -999
+
+        z_target = meta_v.get("z_target_m", meta_v.get("z_star_m", np.nan))
+
         center_ppb = float(grid_ppb[ii, jj])
 
-        invalid_mask = meta_v.get("below_ground_mask", None)  # 2D bool (Ny_s, Nx_s) in HEIGHT mode; None in A mode
+        # only HEIGHT returns this; A will be None
+        invalid_mask = meta_v.get("below_ground_mask", None)
 
-# --- CUMULATIVE SECTORS (C1..Ck) ---
-    _, sector_masks = compute_sector_tables_generic(
-    ii, jj, lats_small, lons_small, grid_ppb, species, radii=radii,
-    invalid_mask=invalid_mask,
-    w_area=w_area_small
-)
+        # -----------------------------
+        # CUMULATIVE SECTORS (C1..Ck)
+        # -----------------------------
+        _, sector_masks = compute_sector_tables_generic(
+            ii, jj, lats_small, lons_small, grid_ppb, species,
+            radii=radii,
+            invalid_mask=invalid_mask,
+            w_area=w_area_small
+        )
 
-    cum_dfs, _ = compute_cumulative_sector_tables(
-    sector_masks, lats_small, lons_small, grid_ppb, species,
-    invalid_mask=invalid_mask,
-    w_area=w_area_small
-)
+        cum_dfs, _ = compute_cumulative_sector_tables(
+            sector_masks, lats_small, lons_small, grid_ppb, species,
+            invalid_mask=invalid_mask,
+            w_area=w_area_small
+        )
 
-    for k, df_c in enumerate(cum_dfs, start=1):
+        for k, df_c in enumerate(cum_dfs, start=1):
+            n_total = int(len(df_c))
+            n_valid = int(df_c["is_valid"].sum()) if "is_valid" in df_c.columns else int(np.isfinite(df_c[species]).sum())
+            n_excluded = int(n_total - n_valid)
+            frac_excluded = float(n_excluded / n_total) if n_total > 0 else np.nan
 
-    # counts
-        n_total = int(len(df_c))
-        n_valid = int(df_c["is_valid"].sum()) if "is_valid" in df_c.columns else int(np.isfinite(df_c[species]).sum())
-        n_excluded = int(n_total - n_valid)
-        frac_excluded = float(n_excluded / n_total) if n_total > 0 else np.nan
+            st = sector_stats_weighted(df_c, species, w_col="w_area") if weighted else sector_stats_unweighted(df_c, species)
 
-    # stats (NaNs already excluded by your stats fns)
-        st = sector_stats_weighted(df_c, species, w_col="w_area") if weighted else sector_stats_unweighted(df_c, species)
+            rows.append({
+                "station": station_name,
+                "date": date,
+                "time": time,
+                "timestamp": f"{date} {time}",
+                "mode": mode.upper(),
+                "sector_type": "CUM",
+                "sector": f"C{k}",
+                "radius": radii[k - 1],
+                "k_star_center": int(k_center),
+                "z_target_m": float(z_target),
+                "center_ppb": center_ppb,
+                "n_total": n_total,
+                "n_valid": n_valid,
+                "n_excluded": n_excluded,
+                "frac_excluded": frac_excluded,
+                **st,
+            })
 
-        rows.append({
-        "station": station_name,
-        "date": date,
-        "time": time,
-        "timestamp": f"{date} {time}",
-        "mode": mode.upper(),
-        "sector_type": "CUM",
-        "sector": f"C{k}",
-        "radius": radii[k - 1],
-        "k_star_center": int(k_center),
-        "z_target_m": float(z_target),
-        "center_ppb": center_ppb,
-
-        # NEW: validity accounting
-        "n_total": n_total,
-        "n_valid": n_valid,
-        "n_excluded": n_excluded,
-        "frac_excluded": frac_excluded,
-
-        **st,
-    })
-
-        # --- DISTANCE CUMULATIVE ONLY (D≤...) ---
+        # -----------------------------
+        # DISTANCE CUMULATIVE (D≤...)
+        # -----------------------------
         df_dist = build_distance_dataframe(
-        lats_small, lons_small, grid_ppb, lat_s, lon_s,
-        var_name=species, w_area=w_area_small
-)
+            lats_small, lons_small, grid_ppb, lat_s, lon_s,
+            var_name=species,
+            w_area=w_area_small
+        )
 
-# Add validity to df_dist using invalid_mask (if any)
-    if invalid_mask is not None:
-        if lats_small.ndim == 1 and lons_small.ndim == 1:
-        # build indices by meshgrid
-            Ny_s = len(lats_small)
-            Nx_s = len(lons_small)
-            iy, ix = np.divmod(np.arange(Ny_s * Nx_s), Nx_s)
+        # validity column
+        if invalid_mask is not None:
+            inv_flat = np.asarray(invalid_mask, dtype=bool).ravel()
+            df_dist["is_valid"] = ~inv_flat
         else:
-        # rare case; for 2D lat/lon you likely still have regular data_arr indexing
-            Ny_s, Nx_s = invalid_mask.shape
-            iy, ix = np.divmod(np.arange(Ny_s * Nx_s), Nx_s)
+            df_dist["is_valid"] = np.isfinite(pd.to_numeric(df_dist[species], errors="coerce"))
 
-        inv_flat = np.asarray(invalid_mask, dtype=bool).ravel()
-        df_dist["is_valid"] = ~inv_flat
-    else:
-        df_dist["is_valid"] = np.isfinite(pd.to_numeric(df_dist[species], errors="coerce"))
+        for dmax in radii_km:
+            df_cum = df_dist[df_dist["distance_km"] <= float(dmax)].copy()
+            if df_cum.empty:
+                continue
 
-    for dmax in radii_km:
-        df_cum = df_dist[df_dist["distance_km"] <= float(dmax)].copy()
-        if df_cum.empty:
-            continue
+            n_total = int(len(df_cum))
+            n_valid = int(df_cum["is_valid"].sum())
+            n_excluded = int(n_total - n_valid)
+            frac_excluded = float(n_excluded / n_total) if n_total > 0 else np.nan
 
-        n_total = int(len(df_cum))
-        n_valid = int(df_cum["is_valid"].sum())
-        n_excluded = int(n_total - n_valid)
-        frac_excluded = float(n_excluded / n_total) if n_total > 0 else np.nan
+            df_valid = df_cum[df_cum["is_valid"]].copy()
+            st = sector_stats_weighted(df_valid, species, w_col="w_area") if weighted else sector_stats_unweighted(df_valid, species)
 
-    # stats should use only valid rows
-        df_valid = df_cum[df_cum["is_valid"]].copy()
+            rows.append({
+                "station": station_name,
+                "date": date,
+                "time": time,
+                "timestamp": f"{date} {time}",
+                "mode": mode.upper(),
+                "sector_type": "DISTCUM",
+                "sector": f"D≤{int(dmax)}",
+                "radius": float(dmax),
+                "k_star_center": int(k_center),
+                "z_target_m": float(z_target),
+                "center_ppb": center_ppb,
+                "n_total": n_total,
+                "n_valid": n_valid,
+                "n_excluded": n_excluded,
+                "frac_excluded": frac_excluded,
+                **st,
+            })
 
-        if weighted:
-            st = sector_stats_weighted(df_valid, species, w_col="w_area")
-        else:
-            st = sector_stats_unweighted(df_valid, species)
-
-        rows.append({
-        "station": station_name,
-        "date": date,
-        "time": time,
-        "timestamp": f"{date} {time}",
-        "mode": mode.upper(),
-        "sector_type": "DISTCUM",
-        "sector": f"D≤{int(dmax)}",
-        "radius": float(dmax),
-        "k_star_center": int(k_center),
-        "z_target_m": float(z_target),
-        "center_ppb": center_ppb,
-
-        # NEW: validity accounting
-        "n_total": n_total,
-        "n_valid": n_valid,
-        "n_excluded": n_excluded,
-        "frac_excluded": frac_excluded,
-
-        **st,
-    })
-
+        # close per-timestep files
         for ds in (ds_species, ds_T, ds_PL, ds_RH):
             ds.close()
 
@@ -539,7 +528,7 @@ def run_period_cumulative_sector_timeseries(
     if df_per_timestep.empty:
         return df_per_timestep, df_per_timestep
 
-    # --- temporal summary over time for each sector ---
+    # temporal summary
     if weighted:
         stat_cols = [c for c in ["n", "mean_w", "std_w", "cv_w", "median_w", "iqr_w", "q1_w", "q3_w"] if c in df_per_timestep.columns]
     else:

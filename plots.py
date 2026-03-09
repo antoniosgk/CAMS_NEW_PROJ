@@ -841,18 +841,16 @@ def plot_ratio_bars(df_ratio, ax=None, title=None, ylabel="Mean / center value",
 
 
 def _ensure_datetime(df, date_col="date", time_col="time"):
-    return pd.to_datetime(
-        df[date_col].astype(str) + df[time_col].astype(str),
-        format="%Y%m%d%H%M",
-        errors="coerce",
-    )
+    d = df[date_col].astype(str).str.strip()
+    t = df[time_col].astype(str).str.strip().str.zfill(4)  # ✅ ensures HHMM
+    return pd.to_datetime(d + t, format="%Y%m%d%H%M", errors="coerce")
 
 
 def plot_cum_sector_ratio_timeseries(
     df_per_timestep,cmap_name="Reds",start=0.85,end=0.25,
     ax=None,
     title=None,
-    ylabel="Cumulative sector mean / center",
+    ylabel="Cumulative sector mean / center",xlim=None
 ):
     """
     Uses rows where sector_type == 'CUM'.
@@ -910,7 +908,8 @@ def plot_cum_sector_ratio_timeseries(
     else:
         fig = ax.figure
     for col in wide.columns:
-        ax.plot(wide.index, wide[col].values, label=str(col), color=mapping[col], linewidth=2.0)
+        ax.plot(wide.index, wide[col].values, label=str(col), color=mapping[col], linewidth=2.0,marker="o", markersize=3)
+
     ax.axhline(1.0, linestyle="--", linewidth=1)
     ax.set_ylabel(ylabel)
     ax.set_xlabel("Time")
@@ -919,13 +918,14 @@ def plot_cum_sector_ratio_timeseries(
     ax.legend(title="Cumulative sector", ncol=2)
     if title:
         ax.set_title(title)
-
+    if xlim is not None:
+        ax.set_xlim(xlim)
     return fig, ax
 
 
 def plot_cum_distance_ratio_timeseries(
     df_per_timestep,
-    dist_bins_km,
+    dist_bins_km,xlim=None,
     ax=None,
     title=None,cmap="Reds",start=0.85,end=0.25,
     ylabel="Cumulative distance mean / center",
@@ -1026,10 +1026,10 @@ def plot_cum_sector_cv_timeseries(
     ax=None,
     title=None,
     ylabel="CV (%)",
-    weighted=True,
+    weighted=True,xlim=None,
     cmap_name="Reds",
     start=0.85,
-    end=0.25,
+    end=0.25,marker="o", markersize=3
 ):
     """
     Time-series line plot:
@@ -1039,9 +1039,6 @@ def plot_cum_sector_cv_timeseries(
     Colors are the SAME Reds palette used by plot_rectangles/plot_ratio_bars.
     """
 
-    import numpy as np
-    import pandas as pd
-    import matplotlib.pyplot as plt
 
     df = df_per_timestep.copy()
 
@@ -1092,7 +1089,8 @@ def plot_cum_sector_cv_timeseries(
         fig, ax = plt.subplots()
     else:
         fig = ax.figure
-
+    print("NaT count:", df["datetime"].isna().sum(), "rows:", len(df))
+    print(df[["date","time","datetime"]].head(10))
     for col in wide.columns:
         ax.plot(
             wide.index,
@@ -1104,6 +1102,9 @@ def plot_cum_sector_cv_timeseries(
 
     ax.set_ylabel(ylabel)
     ax.set_xlabel("Time")
+    if xlim is not None:
+        ax.set_xlim(xlim)
+    #ax.set_xlim()
     ax.grid(True, axis="y", linestyle="--", alpha=0.4)
     ax.legend(title="Cumulative sector", ncol=2)
 
