@@ -18,11 +18,18 @@ df1 = df.groupby('timestamp').mean('center_ppb')
 print(df1)
 # %%
 plt.figure(figsize=(10, 5))
-plt.plot(df1.index, df1['center_ppb'], label='Mean center_ppb')
+plt.plot(df1.index, df1['center_ppb'])
 plt.title(f'Timeseries of {species} for the cell where {name_station} station falls into')
 plt.xlabel('Time')
 plt.ylabel(f'{species} {units}')
 plt.xticks(rotation=45)
 plt.legend()
 plt.show()
+# %%
+df2=df.copy()
+df['timestamp'] = pd.to_datetime(df['timestamp'])
+df2=df.groupby('sector').mean('center_ppb')
+df2
+# %%
+print(type(df2['date']))
 # %%
