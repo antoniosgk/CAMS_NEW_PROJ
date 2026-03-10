@@ -55,17 +55,17 @@ from io_netcdf import df30min_to_netcdf_station_species
 # -----------------------
 # USER SETTINGS
 # -----------------------
-RUN_PERIOD = False
+RUN_PERIOD = True
 
 # Period settings (only used when RUN_PERIOD=True)
-START_DT = datetime.datetime(2005, 5, 20, 0, 0)  #yyyy,m,d,hr,min
-END_DT   = datetime.datetime(2005, 5, 21, 0, 00)
+START_DT = datetime.datetime(2005, 5, 16, 0, 0)  #yyyy,m,d,hr,min
+END_DT   = datetime.datetime(2007, 6, 15, 0, 00)
 print("START_DT:", START_DT)
 print("END_DT:", END_DT)
 print("Generated timestamps:", list(iter_timestamps(START_DT, END_DT, 30)))
 # Mode works for BOTH single timestep and period
 MODE = "A"          # "A" or "HEIGHT"
-idx = 1467
+idx = 5
 cell_nums = 10
 dist_bins_km = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 out_dir = "/home/agkiokas/CAMS/plots/"
@@ -120,9 +120,9 @@ def run_single_timestep(mode="A", weighted=True):
     """
     # ---- local plotting settings (same as your old main) ----
     d_zoom_species = 0.8
-    d_zoom_topo = 20.0
+    d_zoom_topo = 30.0
     zoom_map = 45.0
-    fig4_with_topo = False  # set True if you want station map on topo background
+    fig4_with_topo = True # set True if you want station map on topo background
 
     stations = load_stations(stations_path)
     station = select_station(stations, idx)
@@ -485,7 +485,7 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
         raise FileNotFoundError("No species files found in the requested period.")
     ts = list(iter_timestamps(START_DT, END_DT, 30))
     print("Generated timestamps:", ts)
-    '''
+    
     for (d0, t0) in ts:
         spf, Tf, PLf, RHf, orogf = build_paths(base_path, product, species, d0, t0)
         print(d0, t0, "->", str(spf), "exists:", os.path.exists(spf))
@@ -495,7 +495,7 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
         print("  PL  exists:", os.path.exists(PLf),  PLf)
         print("  RH  exists:", os.path.exists(RHf),  RHf)
         print("  orog exists:", os.path.exists(orogf),orogf)
-        '''
+        
     df_30min, df_summary = run_period_cumulative_sector_timeseries(
         base_path=base_path,
         product=product,
@@ -509,13 +509,15 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
         step_minutes=step_minutes,
         weighted=weighted
     )
-
+    print("df_30min shape:", df_30min.shape)
+    print("df_30min columns:", list(df_30min.columns))
+    print(df_30min.head(5))
     # time-series ratio plots
     fig1, ax1 = plot_cum_sector_ratio_timeseries(
         df_30min,xlim=(start_dt,end_dt),
         title=f"{species}: CUM sector mean / center ({name} {mode})"
     )
-    fig1.savefig(f"{out_dir}/{name}_{species}_{mode}_ts_ratio_CUM.png", dpi=200)
+    fig1.savefig(f"{out_dir}/{name}_{species}_ts_ratio_CUM.png", dpi=200)
     '''
     fig2, ax2 = plot_cum_distance_ratio_timeseries(
         df_30min,

@@ -21,7 +21,7 @@ RH_file      = Path(f"{base_path}/RH/{product}_RH_{date}_{time}.nc4")
 
 def build_paths(base_path: str, product: str, species: str, date: str, time: str):
     """
-    Build paths for a single timestamp:
+    Build paths for a single timestamp when:
       - species file
       - temperature file
       - pressure-level file

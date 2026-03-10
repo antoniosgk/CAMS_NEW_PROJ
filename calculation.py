@@ -13,7 +13,14 @@ from vertical_indexing import (
 
 # Keep your project constant
 EARTH_RADIUS_KM = 6371.0
-
+from pathlib import Path
+def all_inputs_exist(spf, Tf, PLf, RHf, orogf):
+    """Return True only if all required files exist."""
+    return (Path(spf).exists()
+            and Path(Tf).exists()
+            and Path(PLf).exists()
+            and Path(RHf).exists()
+            and Path(orogf).exists())
 
 # -----------------------------
 # Weights
@@ -376,23 +383,26 @@ def run_period_cumulative_sector_timeseries(
         time = str(time).zfill(4)
 
         spf, Tf, PLf, RHf, orogf = build_paths(base_path, product, species, date, time)
-
+        #  Skip if any required file is missing (no crash)
+        if not all_inputs_exist(spf, Tf, PLf, RHf, orogf):
+           continue
         ds_species = ds_T = ds_PL = ds_RH = None
         try:
             ds_species = xr.open_dataset(spf)
             ds_T = xr.open_dataset(Tf)
             ds_PL = xr.open_dataset(PLf)
             ds_RH = xr.open_dataset(RHf)
-        except FileNotFoundError:
+            ds_orog    = orog_cache.get(orogf)
+        except Exception:    
             for ds in (ds_species, ds_T, ds_PL, ds_RH):
                 if ds is not None:
                     try:
-                        ds.close()
+                      ds.close()
                     except Exception:
                         pass
             continue
 
-        ds_orog = orog_cache.get(orogf)
+        
 
         # --- build 2D ppb grid in the small box ---
         if mode.upper() == "A":

@@ -272,7 +272,7 @@ def plot_variable_on_map(
       cb_sp=fig.colorbar(im,cax=cax_sp)
       cb_sp.set_label(units)    
     
-    if not plot_species and meta is not None:
+    if not plot_species and terrain_im is not None:
       ax.set_title(
         f"Station {meta['station_name']} "
         f"({meta['station_lat']:.3f}°, {meta['station_lon']:.3f}°), "
