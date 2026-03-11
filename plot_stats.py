@@ -9,6 +9,29 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import to_hex
 #%%
 # ============================================================
+# ============================================================
+# USER INPUTS
+# ============================================================
+RUN_MODE = "one"          # "one", "multi", "both"
+species = "O3"
+mode = "A"
+units = "ppb"
+
+station = "1461A"
+stations = ["1461A", "1006A", "2686A"]
+
+SECTOR_TYPE = "CUM"
+CENTER_COL = "center_ppb"
+CV_COL = "cv_w"
+SECTOR_COL = "sector"
+AGGREGATE_CV_OVER_SECTORS = True
+
+PLOTS_DIR = "/home/agkiokas/CAMS/plots"
+STATIONS_PATH = "/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt"
+
+out_dir_one = f"{PLOTS_DIR}/full_analysis_one_station"
+out_dir_multi = f"{PLOTS_DIR}/full_analysis_multi_station"
+#%%
 # 1. STATIONS LOADER
 # ============================================================
 def load_stations_file(stations_path: str) -> pd.DataFrame:
@@ -764,6 +787,7 @@ def plot_center_vs_cv_scatter_by_month(
 
 
 # ============================================================
+# ============================================================
 # 12. ALTITUDE RELATIONS FOR MULTIPLE STATIONS
 # ============================================================
 def plot_altitude_relations(
@@ -790,7 +814,10 @@ def plot_altitude_relations(
     r1 = safe_corr(tbl["Altitude"], tbl["center_mean"])
     ax1.set_xlabel("Altitude (m)")
     ax1.set_ylabel("Mean center_ppb")
-    ax1.set_title(f"Mean center_ppb vs Altitude | r={r1:.3f}" if pd.notna(r1) else "Mean center_ppb vs Altitude")
+    ax1.set_title(
+        f"Mean center_ppb vs Altitude | r={r1:.3f}"
+        if pd.notna(r1) else "Mean center_ppb vs Altitude"
+    )
     ax1.grid(True, alpha=0.3)
     fig1.tight_layout()
     if out_prefix:
@@ -808,7 +835,10 @@ def plot_altitude_relations(
     r2 = safe_corr(tbl["Altitude"], tbl["cv_w_mean"])
     ax2.set_xlabel("Altitude (m)")
     ax2.set_ylabel("Mean cv_w")
-    ax2.set_title(f"Mean cv_w vs Altitude | r={r2:.3f}" if pd.notna(r2) else "Mean cv_w vs Altitude")
+    ax2.set_title(
+        f"Mean cv_w vs Altitude | r={r2:.3f}"
+        if pd.notna(r2) else "Mean cv_w vs Altitude"
+    )
     ax2.grid(True, alpha=0.3)
     fig2.tight_layout()
     if out_prefix:
@@ -826,7 +856,10 @@ def plot_altitude_relations(
     r3 = safe_corr(tbl["Altitude"], tbl["center_std"])
     ax3.set_xlabel("Altitude (m)")
     ax3.set_ylabel("Std of center_ppb")
-    ax3.set_title(f"Variability of center_ppb vs Altitude | r={r3:.3f}" if pd.notna(r3) else "Variability of center_ppb vs Altitude")
+    ax3.set_title(
+        f"Variability of center_ppb vs Altitude | r={r3:.3f}"
+        if pd.notna(r3) else "Variability of center_ppb vs Altitude"
+    )
     ax3.grid(True, alpha=0.3)
     fig3.tight_layout()
     if out_prefix:
@@ -837,178 +870,68 @@ def plot_altitude_relations(
     results["center_std_vs_altitude_corr"] = r3
 
     return tbl, results
-#%%
-stations_path = "/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt"
-stations_df = load_stations_file(stations_path)
 
-species = "O3"
-mode = "A"
-input_dir = "/home/agkiokas/CAMS/plots"
-out_dir = "/home/agkiokas/CAMS/plots"
 
-# one station
-station = "1461A"
-df_one = load_station_timeseries_csv(f"{input_dir}/{station}_{species}_{mode}_30min.csv", station_name=station)
-df_one = attach_station_metadata(df_one, stations_df)
-#%%
-# multiple stations
-stations = ["1461A", "1006A", "2629A","2686A"]
-df_all = load_many_station_csvs(input_dir=input_dir, species=species, mode=mode, station_names=stations)
-df_all = attach_station_metadata(df_all, stations_df)
-#--------------------------------------------------------
-plot_one_station_seasonal_center(
-    df=df_one,
-    station=station,
-    stations_df=stations_df,
+# ============================================================
+# 12b. FULL-PERIOD TIMESERIES OF center_ppb
+# ============================================================
+def plot_center_timeseries_full_period(
+    df,
+    stations=None,
+    stations_df=None,
     center_col="center_ppb",
-    mode=mode,
-    species=species,
+    mode=None,
+    species="O3",
     units="ppb",
-    out_path=f"{out_dir}/{station}_{species}_seasonal_center.png"
-)
-#------------------------------------------------------
-plot_multi_station_seasonal_center(
-    df=df_all,
-    stations=stations,
-    stations_df=stations_df,
-    center_col="center_ppb",
-    mode=mode,
-    species=species,
-    units="ppb",
-    out_path=f"{out_dir}/multi_station_{species}_seasonal_center.png"
-)
+    out_path=None,
+    figsize=(14, 6)
+):
+    data = prepare_center_timeseries(
+        df=df,
+        stations=stations,
+        center_col=center_col,
+        mode=mode
+    )
 
-plot_one_station_seasonal_cv_by_sector(
-    df=df_one,
-    station=station,
-    stations_df=stations_df,
-    cv_col="cv_w",
-    sector_col="sector",
-    sector_type="CUM",
-    mode=mode,
-    species=species,
-    out_path=f"{out_dir}/{station}_{species}_seasonal_cvw_by_sector.png"
-)
-#--------------------------------------------------------------------------
-monthly_one = monthly_stats_table(df_one, value_cols=["center_ppb", "cv_w"])
-seasonal_one = seasonal_stats_table(df_one, value_cols=["center_ppb", "cv_w"])
+    alt_map = {}
+    if stations_df is not None:
+        alt_map = dict(zip(stations_df["Station_Name"], stations_df["Altitude"]))
 
-print("\nMONTHLY STATS - ONE STATION")
-print(monthly_one.to_string(index=False))
+    fig, ax = plt.subplots(figsize=figsize)
 
-print("\nSEASONAL STATS - ONE STATION")
-print(seasonal_one.to_string(index=False))
+    for st, sub in data.groupby("station"):
+        label = st
+        alt = alt_map.get(st, np.nan)
+        if pd.notna(alt):
+            label = f"{st} ({alt:.0f} m)"
+        ax.plot(sub["timestamp"], sub[center_col], label=label)
 
-monthly_one.to_csv(f"{out_dir}/{station}_{species}_monthly_stats.csv", index=False)
-seasonal_one.to_csv(f"{out_dir}/{station}_{species}_seasonal_stats.csv", index=False)
-#------------------------------------------------------------------------------
-monthly_all = monthly_stats_table(df_all, value_cols=["center_ppb", "cv_w"])
-seasonal_all = seasonal_stats_table(df_all, value_cols=["center_ppb", "cv_w"])
+    title = f"{species} full-period timeseries of {center_col}"
+    if stations is not None:
+        if isinstance(stations, str):
+            title += f" - {stations}"
+        else:
+            title += " - selected stations"
 
-monthly_all.to_csv(f"{out_dir}/multi_station_{species}_monthly_stats.csv", index=False)
-seasonal_all.to_csv(f"{out_dir}/multi_station_{species}_seasonal_stats.csv", index=False)
+    ax.set_title(title)
+    ax.set_xlabel("Time")
+    ax.set_ylabel(f"{species} ({units})")
+    ax.tick_params(axis="x", rotation=45)
+    ax.grid(True, alpha=0.3)
+    ax.legend()
 
-plot_monthly_boxplot(
-    df=df_one,
-    value_col="center_ppb",
-    stations=station,
-    mode=mode,
-    title=f"{station} monthly boxplot of center_ppb",
-    ylabel="center_ppb",
-    out_path=f"{out_dir}/{station}_{species}_monthly_box_center.png"
-)
+    fig.tight_layout()
 
-plot_monthly_boxplot(
-    df=df_one,
-    value_col="cv_w",
-    stations=station,
-    mode=mode,
-    sector_type="CUM",
-    title=f"{station} monthly boxplot of cv_w",
-    ylabel="cv_w",
-    out_path=f"{out_dir}/{station}_{species}_monthly_box_cvw.png"
-)
+    if out_path:
+        ensure_dir(out_path)
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
 
-plot_seasonal_boxplot(
-    df=df_one,
-    value_col="center_ppb",
-    stations=station,
-    mode=mode,
-    title=f"{station} seasonal boxplot of center_ppb",
-    ylabel="center_ppb",
-    out_path=f"{out_dir}/{station}_{species}_seasonal_box_center.png"
-)
+    plt.show()
+    return fig, ax
 
-plot_seasonal_boxplot(
-    df=df_one,
-    value_col="cv_w",
-    stations=station,
-    mode=mode,
-    sector_type="CUM",
-    title=f"{station} seasonal boxplot of cv_w",
-    ylabel="cv_w",
-    out_path=f"{out_dir}/{station}_{species}_seasonal_box_cvw.png"
-)
-#------------------------------------
-pairs_one, corr_one, _, _ = plot_center_vs_cv_scatter(
-    df=df_one,
-    stations=station,
-    mode=mode,
-    sector_type="CUM",
-    aggregate_cv_over_sectors=True,
-    out_path=f"{out_dir}/{station}_{species}_scatter_center_vs_cvw.png"
-)
 
-print("Overall correlation center_ppb vs cv_w:", corr_one)
-#-------------------------------------------------------------
-pairs_season, _, _ = plot_center_vs_cv_scatter_by_season(
-    df=df_one,
-    stations=station,
-    mode=mode,
-    sector_type="CUM",
-    aggregate_cv_over_sectors=True,
-    out_path=f"{out_dir}/{station}_{species}_scatter_center_vs_cvw_by_season.png"
-)
-
-corr_season_tbl = correlation_by_season(pairs_season)
-print("\nCorrelation by season")
-print(corr_season_tbl.to_string(index=False))
-corr_season_tbl.to_csv(f"{out_dir}/{station}_{species}_corr_by_season.csv", index=False)
-#----------------------------------------------------------------------
-pairs_month, _, _ = plot_center_vs_cv_scatter_by_month(
-    df=df_one,
-    stations=station,
-    mode=mode,
-    sector_type="CUM",
-    aggregate_cv_over_sectors=True,
-    out_path=f"{out_dir}/{station}_{species}_scatter_center_vs_cvw_by_month.png"
-)
-
-corr_month_tbl = correlation_by_month(pairs_month)
-print("\nCorrelation by month")
-print(corr_month_tbl.to_string(index=False))
-corr_month_tbl.to_csv(f"{out_dir}/{station}_{species}_corr_by_month.csv", index=False)
-#-------------------------------------------------------------------
-alt_tbl, alt_corrs = plot_altitude_relations(
-    df=df_all,
-    stations=stations,
-    mode=mode,
-    sector_type="CUM",
-    center_col="center_ppb",
-    cv_col="cv_w",
-    out_prefix=f"{out_dir}/multi_station_{species}_altitude"
-)
-
-print("\nPer-station altitude relation table")
-print(alt_tbl.to_string(index=False))
-
-print("\nAltitude correlations")
-print(alt_corrs)
-
-alt_tbl.to_csv(f"{out_dir}/multi_station_{species}_altitude_relation_table.csv", index=False)
 # ============================================================
 # 13. WRAPPERS: RUN EVERYTHING AUTOMATICALLY
-#    PUT THIS AT THE END OF YOUR FILE
 # ============================================================
 def run_full_station_analysis(
     df,
@@ -1024,12 +947,19 @@ def run_full_station_analysis(
     sector_col="sector",
     aggregate_cv_over_sectors=True,
 ):
-    """
-    Runs the full analysis for ONE station and saves all outputs.
-    """
     os.makedirs(out_dir, exist_ok=True)
 
-    # 1. Seasonal center timeseries
+    plot_center_timeseries_full_period(
+        df=df,
+        stations=station,
+        stations_df=stations_df,
+        center_col=center_col,
+        mode=mode,
+        species=species,
+        units=units,
+        out_path=os.path.join(out_dir, f"{station}_{species}_full_period_{center_col}.png")
+    )
+
     plot_one_station_seasonal_center(
         df=df,
         station=station,
@@ -1041,7 +971,6 @@ def run_full_station_analysis(
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_center.png")
     )
 
-    # 2. Seasonal cv_w by sector
     plot_one_station_seasonal_cv_by_sector(
         df=df,
         station=station,
@@ -1054,7 +983,6 @@ def run_full_station_analysis(
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_{cv_col}_by_sector.png")
     )
 
-    # 3. Monthly boxplots
     plot_monthly_boxplot(
         df=df,
         value_col=center_col,
@@ -1076,7 +1004,6 @@ def run_full_station_analysis(
         out_path=os.path.join(out_dir, f"{station}_{species}_monthly_box_{cv_col}.png")
     )
 
-    # 4. Seasonal boxplots
     plot_seasonal_boxplot(
         df=df,
         value_col=center_col,
@@ -1098,7 +1025,6 @@ def run_full_station_analysis(
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_box_{cv_col}.png")
     )
 
-    # 5. Scatter overall
     pairs, corr_all, _, _ = plot_center_vs_cv_scatter(
         df=df,
         stations=station,
@@ -1108,7 +1034,6 @@ def run_full_station_analysis(
         out_path=os.path.join(out_dir, f"{station}_{species}_scatter_{center_col}_vs_{cv_col}.png")
     )
 
-    # 6. Scatter by season
     pairs_season, _, _ = plot_center_vs_cv_scatter_by_season(
         df=df,
         stations=station,
@@ -1118,7 +1043,6 @@ def run_full_station_analysis(
         out_path=os.path.join(out_dir, f"{station}_{species}_scatter_{center_col}_vs_{cv_col}_by_season.png")
     )
 
-    # 7. Scatter by month
     pairs_month, _, _ = plot_center_vs_cv_scatter_by_month(
         df=df,
         stations=station,
@@ -1128,9 +1052,14 @@ def run_full_station_analysis(
         out_path=os.path.join(out_dir, f"{station}_{species}_scatter_{center_col}_vs_{cv_col}_by_month.png")
     )
 
-    # 8. Stats tables
-    monthly_stats = monthly_stats_table(df[df["station"] == station], value_cols=[center_col, cv_col])
-    seasonal_stats = seasonal_stats_table(df[df["station"] == station], value_cols=[center_col, cv_col])
+    monthly_stats = monthly_stats_table(
+        df[df["station"] == station],
+        value_cols=[center_col, cv_col]
+    )
+    seasonal_stats = seasonal_stats_table(
+        df[df["station"] == station],
+        value_cols=[center_col, cv_col]
+    )
 
     monthly_stats.to_csv(
         os.path.join(out_dir, f"{station}_{species}_monthly_stats.csv"),
@@ -1141,7 +1070,6 @@ def run_full_station_analysis(
         index=False
     )
 
-    # 9. Correlation tables
     corr_month_tbl = correlation_by_month(pairs_month, x_col="center_ppb", y_col="cv_w")
     corr_season_tbl = correlation_by_season(pairs_season, x_col="center_ppb", y_col="cv_w")
 
@@ -1180,12 +1108,19 @@ def run_full_multi_station_analysis(
     cv_col="cv_w",
     aggregate_cv_over_sectors=True,
 ):
-    """
-    Runs the full analysis for MULTIPLE stations and saves all outputs.
-    """
     os.makedirs(out_dir, exist_ok=True)
 
-    # 1. Seasonal multi-station center timeseries
+    plot_center_timeseries_full_period(
+        df=df,
+        stations=stations,
+        stations_df=stations_df,
+        center_col=center_col,
+        mode=mode,
+        species=species,
+        units=units,
+        out_path=os.path.join(out_dir, f"multi_station_{species}_full_period_{center_col}.png")
+    )
+
     plot_multi_station_seasonal_center(
         df=df,
         stations=stations,
@@ -1197,7 +1132,6 @@ def run_full_multi_station_analysis(
         out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_center.png")
     )
 
-    # 2. Monthly boxplots
     plot_monthly_boxplot(
         df=df,
         value_col=center_col,
@@ -1219,7 +1153,6 @@ def run_full_multi_station_analysis(
         out_path=os.path.join(out_dir, f"multi_station_{species}_monthly_box_{cv_col}.png")
     )
 
-    # 3. Seasonal boxplots
     plot_seasonal_boxplot(
         df=df,
         value_col=center_col,
@@ -1241,7 +1174,6 @@ def run_full_multi_station_analysis(
         out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{cv_col}.png")
     )
 
-    # 4. Scatter overall
     pairs, corr_all, _, _ = plot_center_vs_cv_scatter(
         df=df,
         stations=stations,
@@ -1251,7 +1183,6 @@ def run_full_multi_station_analysis(
         out_path=os.path.join(out_dir, f"multi_station_{species}_scatter_{center_col}_vs_{cv_col}.png")
     )
 
-    # 5. Scatter by season
     pairs_season, _, _ = plot_center_vs_cv_scatter_by_season(
         df=df,
         stations=stations,
@@ -1261,7 +1192,6 @@ def run_full_multi_station_analysis(
         out_path=os.path.join(out_dir, f"multi_station_{species}_scatter_{center_col}_vs_{cv_col}_by_season.png")
     )
 
-    # 6. Scatter by month
     pairs_month, _, _ = plot_center_vs_cv_scatter_by_month(
         df=df,
         stations=stations,
@@ -1271,9 +1201,14 @@ def run_full_multi_station_analysis(
         out_path=os.path.join(out_dir, f"multi_station_{species}_scatter_{center_col}_vs_{cv_col}_by_month.png")
     )
 
-    # 7. Stats tables
-    monthly_stats = monthly_stats_table(df[df["station"].isin(stations)], value_cols=[center_col, cv_col])
-    seasonal_stats = seasonal_stats_table(df[df["station"].isin(stations)], value_cols=[center_col, cv_col])
+    monthly_stats = monthly_stats_table(
+        df[df["station"].isin(stations)],
+        value_cols=[center_col, cv_col]
+    )
+    seasonal_stats = seasonal_stats_table(
+        df[df["station"].isin(stations)],
+        value_cols=[center_col, cv_col]
+    )
 
     monthly_stats.to_csv(
         os.path.join(out_dir, f"multi_station_{species}_monthly_stats.csv"),
@@ -1284,7 +1219,6 @@ def run_full_multi_station_analysis(
         index=False
     )
 
-    # 8. Correlation tables
     corr_month_tbl = correlation_by_month(pairs_month, x_col="center_ppb", y_col="cv_w")
     corr_season_tbl = correlation_by_season(pairs_season, x_col="center_ppb", y_col="cv_w")
 
@@ -1297,7 +1231,6 @@ def run_full_multi_station_analysis(
         index=False
     )
 
-    # 9. Altitude relations
     alt_tbl, alt_corrs = plot_altitude_relations(
         df=df,
         stations=stations,
@@ -1327,61 +1260,56 @@ def run_full_multi_station_analysis(
         "altitude_corrs": alt_corrs,
         "pairs": pairs,
     }
-#%%
-species = "O3"
-mode = "A"
-station = "1461A"
-out_dir = "/home/agkiokas/CAMS/plots/full_analysis_one_station"
 
-# df_one should already be loaded
-# df_one = load_station_timeseries_csv(...)
-# df_one = attach_station_metadata(df_one, stations_df)
 
-res_one = run_full_station_analysis(
-    df=df_one,
-    station=station,
-    stations_df=stations_df,
-    species=species,
-    units="ppb",
-    mode=mode,
-    sector_type="CUM",
-    out_dir=out_dir,
-    center_col="center_ppb",
-    cv_col="cv_w",
-    sector_col="sector",
-    aggregate_cv_over_sectors=True
-)
-#%%
-species = "O3"
-mode = "A"
-stations = ["1461A", "1006A", "2686A"]
-out_dir = "/home/agkiokas/CAMS/plots/full_analysis_multi_station"
+# ============================================================
+# FINAL EXECUTION BLOCK
+# ============================================================
+if __name__ == "__main__":
+    stations_df = load_stations_file(STATIONS_PATH)
 
-# df_all should already be loaded
-# df_all = load_many_station_csvs(...)
-# df_all = attach_station_metadata(df_all, stations_df)
+    if RUN_MODE in ["one", "both"]:
+        df_one = load_station_timeseries_csv(
+            f"{PLOTS_DIR}/{station}_{species}_{mode}_30min.csv",
+            station_name=station
+        )
+        df_one = attach_station_metadata(df_one, stations_df)
 
-res_multi = run_full_multi_station_analysis(
-    df=df_all,
-    stations=stations,
-    stations_df=stations_df,
-    species=species,
-    units="ppb",
-    mode=mode,
-    sector_type="CUM",
-    out_dir=out_dir,
-    center_col="center_ppb",
-    cv_col="cv_w",
-    aggregate_cv_over_sectors=True
-)
+        res_one = run_full_station_analysis(
+            df=df_one,
+            station=station,
+            stations_df=stations_df,
+            species=species,
+            units=units,
+            mode=mode,
+            sector_type=SECTOR_TYPE,
+            out_dir=out_dir_one,
+            center_col=CENTER_COL,
+            cv_col=CV_COL,
+            sector_col=SECTOR_COL,
+            aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS
+        )
 
-#%%
+    if RUN_MODE in ["multi", "both"]:
+        df_all = load_many_station_csvs(
+            input_dir=PLOTS_DIR,
+            species=species,
+            mode=mode,
+            station_names=stations
+        )
+        df_all = attach_station_metadata(df_all, stations_df)
 
-ONE_STATION=True
-def plot_stats():
-    if ONE_STATION:
-        res_one
-    else:
-        res_multi  
-if __name__ == "__plot_stats":
-    plot_stats()          
+        res_multi = run_full_multi_station_analysis(
+            df=df_all,
+            stations=stations,
+            stations_df=stations_df,
+            species=species,
+            units=units,
+            mode=mode,
+            sector_type=SECTOR_TYPE,
+            out_dir=out_dir_multi,
+            center_col=CENTER_COL,
+            cv_col=CV_COL,
+            aggregate_cv_over_seCTORS=AGGREGATE_CV_OVER_SECTORS
+        )
+# %%
