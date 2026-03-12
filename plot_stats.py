@@ -12,13 +12,13 @@ from matplotlib.colors import to_hex
 # ============================================================
 # USER INPUTS
 # ============================================================
-RUN_MODE = "one"          # "one", "multi", "both"
+RUN_MODE = "multi"          # "one", "multi", "both"
 species = "O3"
 mode = "A"
 units = "ppb"
 
-station = "1006A"
-stations = ["1461A", "1006A", "2686A"]
+station = "2629A"
+stations = ["1461A","2629A","2686A"]
 
 SECTOR_TYPE = "CUM"
 CENTER_COL = "center_ppb"
@@ -654,7 +654,7 @@ def plot_one_station_seasonal_cv_by_sector(
 
     suffix = "merged by season" if merge_years else "real timestamps"
     fig.suptitle(
-        f"{species} seasonal {cv_col} by sector - {station} - sector_type={sector_type} ({suffix})",
+        f"{species} seasonal Coefficient of variation (%) by sector - {station} - sector_type={sector_type} ({suffix})",
         y=1.02
     )
     fig.tight_layout()
@@ -691,8 +691,8 @@ def plot_monthly_boxplot(df, value_col, stations=None, mode=None, sector_type=No
     fig, ax = plt.subplots(figsize=figsize)
     ax.boxplot(data, tick_labels=[calendar.month_abbr[m] for m in months])
     ax.set_xlabel("Month")
-    ax.set_ylabel(ylabel or value_col)
-    ax.set_title(title or f"Monthly boxplot of {value_col}")
+    ax.set_ylabel(ylabel or f"{species} ({units})" )
+    ax.set_title(title or f"Monthly boxplot of {species} ({units}) ")
     ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
@@ -764,9 +764,9 @@ def plot_center_vs_cv_scatter(
     else:
         ax.scatter(pairs["center_ppb"], pairs["cv_w"], alpha=0.6)
 
-    ax.set_xlabel("center_ppb")
-    ax.set_ylabel("cv_w")
-    ax.set_title(f"Scatter: center_ppb vs cv_w | Pearson r={corr:.3f}" if pd.notna(corr) else "Scatter: center_ppb vs cv_w")
+    ax.set_xlabel("O3 (ppb)")
+    ax.set_ylabel("Coefficient of variation (%)")
+    ax.set_title(f"Scatter: O3 (central cell) vs CV | Pearson r={corr:.3f}" if pd.notna(corr) else "Scatter: center_ppb vs cv_w")
     ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
@@ -806,15 +806,15 @@ def plot_center_vs_cv_scatter_by_season(
                 ax.scatter(sub["center_ppb"], sub["cv_w"], alpha=0.6)
 
         ax.set_title(f"{season} | r={corr:.3f}" if pd.notna(corr) else f"{season} | r=nan")
-        ax.set_xlabel("center_ppb")
-        ax.set_ylabel("cv_w")
+        ax.set_xlabel("O3 central cell (ppb)")
+        ax.set_ylabel("Coefficient of Variation (%)")
         ax.grid(True, alpha=0.3)
 
     handles, labels = axes[0].get_legend_handles_labels()
     if labels:
         fig.legend(handles, labels, loc="upper right")
 
-    fig.suptitle("center_ppb vs cv_w by season", y=1.02)
+    fig.suptitle("O3(central cell) vs CV by season", y=1.02)
     fig.tight_layout()
     if out_path:
         ensure_dir(out_path)
@@ -852,15 +852,15 @@ def plot_center_vs_cv_scatter_by_month(
                 ax.scatter(sub["center_ppb"], sub["cv_w"], alpha=0.6)
 
         ax.set_title(f"{calendar.month_abbr[m]} | r={corr:.3f}" if pd.notna(corr) else f"{calendar.month_abbr[m]} | r=nan")
-        ax.set_xlabel("center_ppb")
-        ax.set_ylabel("cv_w")
+        ax.set_xlabel("O3 (ppb)")
+        ax.set_ylabel("Coefficient of Variation (%)")
         ax.grid(True, alpha=0.3)
 
     handles, labels = axes[0].get_legend_handles_labels()
     if labels:
         fig.legend(handles, labels, loc="upper right")
 
-    fig.suptitle("center_ppb vs cv_w by month", y=1.02)
+    fig.suptitle("O3 (central cell) vs CV by month", y=1.02)
     fig.tight_layout()
     if out_path:
         ensure_dir(out_path)
@@ -1071,7 +1071,7 @@ def run_full_station_analysis(
         value_col=center_col,
         stations=station,
         mode=mode,
-        title=f"{station} monthly boxplot of {center_col}",
+        title=f"{station} monthly boxplot of {species} {units}",
         ylabel=center_col,
         out_path=os.path.join(out_dir, f"{station}_{species}_monthly_box_{center_col}.png")
     )
@@ -1082,7 +1082,7 @@ def run_full_station_analysis(
         stations=station,
         mode=mode,
         sector_type=sector_type,
-        title=f"{station} monthly boxplot of {cv_col}",
+        title=f"{station} monthly boxplot of coefficient of variation (%)",
         ylabel=cv_col,
         out_path=os.path.join(out_dir, f"{station}_{species}_monthly_box_{cv_col}.png")
     )
@@ -1092,8 +1092,8 @@ def run_full_station_analysis(
         value_col=center_col,
         stations=station,
         mode=mode,
-        title=f"{station} seasonal boxplot of {center_col}",
-        ylabel=center_col,
+        title=f"{station} seasonal boxplot of {species} ({units})",
+        ylabel=f"{species} ({units})",
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_box_{center_col}.png")
     )
 
@@ -1103,8 +1103,8 @@ def run_full_station_analysis(
         stations=station,
         mode=mode,
         sector_type=sector_type,
-        title=f"{station} seasonal boxplot of {cv_col}",
-        ylabel=cv_col,
+        title=f"{station} seasonal boxplot of Coefficient of variation %",
+        ylabel='CV (%)',
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_box_{cv_col}.png")
     )
 
@@ -1394,7 +1394,7 @@ if __name__ == "__main__":
             out_dir=out_dir_multi,
             center_col=CENTER_COL,
             cv_col=CV_COL,
-            aggregate_cv_over_seCTORS=AGGREGATE_CV_OVER_SECTORS,
+            aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS,
                         merge_years=MERGE_SEASONAL_YEARS)
         
 # %%

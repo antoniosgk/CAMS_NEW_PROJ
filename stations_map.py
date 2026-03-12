@@ -3,7 +3,7 @@ import pandas as pd
 import folium
 from folium.plugins import MarkerCluster, Search
 #%%
-name_st="3612A"
+name_st=["1006A","2629A"]
 
 def load_stations(stations_path):
     """Load station table. Keeps all rows; marks invalid rows (NaNs) for later filtering."""
@@ -47,8 +47,7 @@ def altitude_color(alt):
 
 def find_station(df, text):
     mask = df["Station_Name"].astype(str).str.contains(text, case=False, na=False)
-    return df.loc[mask, ["idx", "Station_Name", "Latitude", "Longitude", "Altitude", "is_valid"]]
-#%%    
+    return df.loc[mask, ["idx", "Station_Name", "Latitude", "Longitude", "Altitude", "is_valid"]]   
 def create_station_map(
     stations_df,
     output_html="stations_map.html",
@@ -59,7 +58,11 @@ def create_station_map(
 ):
     """
     Create an interactive folium map with all valid stations.
-    If highlight_station is given, matching station(s) are shown larger.
+    highlight_station can be:
+      - None
+      - a string
+      - a list of strings
+    Matching station(s) are shown larger.
     """
 
     valid = stations_df[stations_df["is_valid"]].copy()
@@ -71,12 +74,20 @@ def create_station_map(
     center_lat = valid["Latitude"].mean()
     center_lon = valid["Longitude"].mean()
 
+    # normalize highlight_station into a list
+    highlight_list = []
+    if highlight_station is not None:
+        if isinstance(highlight_station, str):
+            highlight_list = [highlight_station]
+        else:
+            highlight_list = list(highlight_station)
+
     # find highlighted station(s)
-    highlighted = pd.DataFrame()
-    if highlight_station is not None and str(highlight_station).strip():
-        mask = valid["Station_Name"].astype(str).str.contains(
-            highlight_station, case=False, na=False
-        )
+    highlighted = pd.DataFrame(columns=valid.columns)
+    if highlight_list:
+        mask = pd.Series(False, index=valid.index)
+        for st in highlight_list:
+            mask |= valid["Station_Name"].astype(str).str.contains(st, case=False, na=False)
         highlighted = valid[mask].copy()
 
         # if exactly one match, center on it
@@ -90,14 +101,16 @@ def create_station_map(
         tiles=tiles
     )
 
-    # container for normal stations
+    # normal stations
     if use_cluster:
         marker_group = MarkerCluster(name="Stations").add_to(m)
     else:
         marker_group = folium.FeatureGroup(name="Stations").add_to(m)
 
-    # separate layer for highlighted station(s), so they stay visually clear
-    highlight_group = folium.FeatureGroup(name="Highlighted station").add_to(m)
+    # highlighted stations
+    highlight_group = folium.FeatureGroup(name="Highlighted stations").add_to(m)
+
+    highlighted_idx = set(highlighted["idx"].values) if not highlighted.empty else set()
 
     for _, row in valid.iterrows():
         popup_html = f"""
@@ -107,15 +120,12 @@ def create_station_map(
         Altitude: {row['Altitude']:.2f} m
         """
 
-        is_highlighted = False
-        if not highlighted.empty:
-            is_highlighted = row["idx"] in highlighted["idx"].values
+        is_highlighted = row["idx"] in highlighted_idx
 
         if is_highlighted:
-            # bigger marker for selected station
-            folium.Marker(
+            folium.CircleMarker(
                 location=[row["Latitude"], row["Longitude"]],
-                radius=15,
+                radius=12,
                 color="black",
                 weight=3,
                 fill=True,
@@ -125,7 +135,6 @@ def create_station_map(
                 tooltip=f"SELECTED: {row['Station_Name']}",
             ).add_to(highlight_group)
         else:
-            # normal stations
             folium.CircleMarker(
                 location=[row["Latitude"], row["Longitude"]],
                 radius=6,
@@ -138,10 +147,18 @@ def create_station_map(
                 tooltip=row["Station_Name"],
             ).add_to(marker_group)
 
-    bounds = [
+    # zoom behavior
+    if zoom_to_highlight and not highlighted.empty:
+        bounds = [
+            [highlighted["Latitude"].min(), highlighted["Longitude"].min()],
+            [highlighted["Latitude"].max(), highlighted["Longitude"].max()],
+        ]
+    else:
+        bounds = [
             [valid["Latitude"].min(), valid["Longitude"].min()],
             [valid["Latitude"].max(), valid["Longitude"].max()],
-        ]    
+        ]
+
     m.fit_bounds(bounds)
 
     folium.LayerControl().add_to(m)
@@ -153,11 +170,17 @@ def create_station_map(
             print(f"No station matched: {highlight_station}")
         else:
             print(highlighted[["idx", "Station_Name", "Latitude", "Longitude", "Altitude"]])
-    m.save("China_Network_Interactive_Map.html")
+
     return m
 
 stations_df = load_stations("/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt")
-print(find_station(stations_df, name_st))
-create_station_map(stations_df, output_html="stations_map.html",highlight_station=name_st)
 
+for st in name_st:
+    print(find_station(stations_df, st))
+
+create_station_map(
+    stations_df,
+    output_html="stations_map.html",
+    highlight_station=name_st
+)
 # %%
