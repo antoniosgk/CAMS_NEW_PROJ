@@ -12,7 +12,7 @@ from matplotlib.colors import to_hex
 # ============================================================
 # USER INPUTS
 # ============================================================
-RUN_MODE = "multi"          # "one", "multi", "both"
+RUN_MODE = "one"          # "one", "multi", "both"
 species = "O3"
 mode = "A"
 units = "ppb"
@@ -26,9 +26,11 @@ CV_COL = "cv_w"
 SECTOR_COL = "sector"
 AGGREGATE_CV_OVER_SECTORS = True
 MERGE_SEASONAL_YEARS = True
+SP_LIM=(0,200)
+CV_LIM=(0,2)
+
 PLOTS_DIR = "/home/agkiokas/CAMS/plots"
 STATIONS_PATH = "/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt"
-
 out_dir_one = f"{PLOTS_DIR}/full_analysis_one_station"
 out_dir_multi = f"{PLOTS_DIR}/full_analysis_multi_station"
 #%%
@@ -454,7 +456,7 @@ def altitude_relation_table(
 # ============================================================
 def plot_one_station_seasonal_center(
     df, station, stations_df=None, center_col="center_ppb", mode=None,
-    species="O3", units="ppb", out_path=None, figsize=(16, 10),
+    species="O3", units="ppb", out_path=None, figsize=(16, 10),sp_lim=None,
     merge_years=False
 ):
     data = prepare_center_timeseries(df, stations=station, center_col=center_col, mode=mode)
@@ -505,7 +507,8 @@ def plot_one_station_seasonal_center(
         else:
             ax.set_xlabel("Time")
             ax.tick_params(axis="x", rotation=45)
-
+    if sp_lim is not None:
+        ax.set_ylim(sp_lim)
     suffix = "merged by season" if merge_years else "real timestamps"
     fig.suptitle(f"{species} center pixel seasonal timeseries - {station} ({suffix})", y=1.02)
     fig.tight_layout()
@@ -519,7 +522,7 @@ def plot_one_station_seasonal_center(
 
 def plot_multi_station_seasonal_center(
     df, stations, stations_df=None, center_col="center_ppb", mode=None,
-    species="O3", units="ppb", out_path=None, figsize=(16, 10),
+    species="O3", units="ppb", out_path=None, figsize=(16, 10),sp_lim=None,
     merge_years=False
 ):
     data = prepare_center_timeseries(df, stations=stations, center_col=center_col, mode=mode)
@@ -563,7 +566,8 @@ def plot_multi_station_seasonal_center(
         ax.set_ylabel(f"{species} ({units})")
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8)
-
+        if sp_lim is not None:
+            ax.set_ylim(sp_lim)
         if merge_years:
             # use the first station only to create year ticks
             first_station = next(iter(sub.groupby("station")))[1].sort_values("timestamp").copy()
@@ -592,7 +596,7 @@ def plot_multi_station_seasonal_center(
 def plot_one_station_seasonal_cv_by_sector(
     df, station, stations_df=None, cv_col="cv_w", sector_col="sector",
     sector_type="CUM", mode=None, species="O3", out_path=None, figsize=(16, 10),
-    merge_years=False
+    merge_years=False,cv_lim=None
 ):
     data = prepare_cv_by_sector(
         df, station=station, cv_col=cv_col, sector_col=sector_col,
@@ -651,7 +655,8 @@ def plot_one_station_seasonal_cv_by_sector(
         else:
             ax.set_xlabel("Time")
             ax.tick_params(axis="x", rotation=45)
-
+        if cv_lim is not None:
+            ax.set_ylim(cv_lim)
     suffix = "merged by season" if merge_years else "real timestamps"
     fig.suptitle(
         f"{species} seasonal Coefficient of variation (%) by sector - {station} - sector_type={sector_type} ({suffix})",
@@ -668,7 +673,7 @@ def plot_one_station_seasonal_cv_by_sector(
 # ============================================================
 # 10. BOXPLOTS: MONTH / SEASON
 # ============================================================
-def plot_monthly_boxplot(df, value_col, stations=None, mode=None, sector_type=None, title=None, ylabel=None, out_path=None, figsize=(12, 6)):
+def plot_monthly_boxplot(df, value_col, stations=None, mode=None, sector_type=None, title=None, ylabel=None,sp_lim=None,cv_lim=None, out_path=None, figsize=(12, 6)):
     out = df.copy()
 
     if stations is not None:
@@ -694,7 +699,7 @@ def plot_monthly_boxplot(df, value_col, stations=None, mode=None, sector_type=No
     ax.set_ylabel(ylabel or f"{species} ({units})" )
     ax.set_title(title or f"Monthly boxplot of {species} ({units}) ")
     ax.grid(True, alpha=0.3)
-
+    ax.set_ylim(sp_lim)
     fig.tight_layout()
     if out_path:
         ensure_dir(out_path)
@@ -703,7 +708,7 @@ def plot_monthly_boxplot(df, value_col, stations=None, mode=None, sector_type=No
     return fig, ax
 
 
-def plot_seasonal_boxplot(df, value_col, stations=None, mode=None, sector_type=None, title=None, ylabel=None, out_path=None, figsize=(10, 6)):
+def plot_seasonal_boxplot(df, value_col, stations=None, mode=None, sector_type=None, title=None, ylabel=None,sp_lim=None,cv_lim=None, out_path=None, figsize=(10, 6)):
     out = df.copy()
 
     if stations is not None:
@@ -727,9 +732,10 @@ def plot_seasonal_boxplot(df, value_col, stations=None, mode=None, sector_type=N
     ax.boxplot(data, tick_labels=seasons)
     ax.set_xlabel("Season")
     ax.set_ylabel(ylabel or value_col)
-    ax.set_title(title or f"Seasonal boxplot of {value_col}")
+    if cv_lim is not None:
+        ax.set_ylim(cv_lim)   
+    ax.set_title(title or f"Seasonal boxplot of CV")
     ax.grid(True, alpha=0.3)
-
     fig.tight_layout()
     if out_path:
         ensure_dir(out_path)
@@ -744,7 +750,7 @@ def plot_seasonal_boxplot(df, value_col, stations=None, mode=None, sector_type=N
 def plot_center_vs_cv_scatter(
     df, stations=None, mode=None, sector_type=None,
     aggregate_cv_over_sectors=True,
-    out_path=None, figsize=(8, 6)
+    out_path=None, figsize=(8, 6),sp_lim=None,cv_lim=None
 ):
     pairs = prepare_center_cv_pairs(
         df=df,
@@ -765,7 +771,9 @@ def plot_center_vs_cv_scatter(
         ax.scatter(pairs["center_ppb"], pairs["cv_w"], alpha=0.6)
 
     ax.set_xlabel("O3 (ppb)")
+    ax.set_xlim(sp_lim)
     ax.set_ylabel("Coefficient of variation (%)")
+    ax.set_ylim(cv_lim)
     ax.set_title(f"Scatter: O3 (central cell) vs CV | Pearson r={corr:.3f}" if pd.notna(corr) else "Scatter: center_ppb vs cv_w")
     ax.grid(True, alpha=0.3)
 
@@ -780,7 +788,7 @@ def plot_center_vs_cv_scatter(
 def plot_center_vs_cv_scatter_by_season(
     df, stations=None, mode=None, sector_type=None,
     aggregate_cv_over_sectors=True,
-    out_path=None, figsize=(14, 10)
+    out_path=None, figsize=(14, 10),sp_lim=None,cv_lim=None
 ):
     pairs = prepare_center_cv_pairs(
         df=df,
@@ -807,7 +815,9 @@ def plot_center_vs_cv_scatter_by_season(
 
         ax.set_title(f"{season} | r={corr:.3f}" if pd.notna(corr) else f"{season} | r=nan")
         ax.set_xlabel("O3 central cell (ppb)")
+        ax.set_xlim(sp_lim)
         ax.set_ylabel("Coefficient of Variation (%)")
+        ax.set_ylim(cv_lim)
         ax.grid(True, alpha=0.3)
 
     handles, labels = axes[0].get_legend_handles_labels()
@@ -826,7 +836,7 @@ def plot_center_vs_cv_scatter_by_season(
 def plot_center_vs_cv_scatter_by_month(
     df, stations=None, mode=None, sector_type=None,
     aggregate_cv_over_sectors=True,
-    out_path=None, figsize=(18, 12)
+    out_path=None, figsize=(18, 12),sp_lim=None,cv_lim=None
 ):
     pairs = prepare_center_cv_pairs(
         df=df,
@@ -853,7 +863,9 @@ def plot_center_vs_cv_scatter_by_month(
 
         ax.set_title(f"{calendar.month_abbr[m]} | r={corr:.3f}" if pd.notna(corr) else f"{calendar.month_abbr[m]} | r=nan")
         ax.set_xlabel("O3 (ppb)")
+        ax.set_xlim(sp_lim)
         ax.set_ylabel("Coefficient of Variation (%)")
+        ax.set_ylim(cv_lim)
         ax.grid(True, alpha=0.3)
 
     handles, labels = axes[0].get_legend_handles_labels()
@@ -876,7 +888,7 @@ def plot_center_vs_cv_scatter_by_month(
 def plot_altitude_relations(
     df, stations=None, mode=None, sector_type=None,
     center_col="center_ppb", cv_col="cv_w",
-    out_prefix=None, figsize=(8, 6)
+    out_prefix=None,sp_lim=None,cv_lim=None, figsize=(8, 6)
 ):
     tbl = altitude_relation_table(
         df=df,
@@ -897,6 +909,7 @@ def plot_altitude_relations(
     r1 = safe_corr(tbl["Altitude"], tbl["center_mean"])
     ax1.set_xlabel("Altitude (m)")
     ax1.set_ylabel("Mean center_ppb")
+    ax1.set_ylim(sp_lim)
     ax1.set_title(
         f"Mean center_ppb vs Altitude | r={r1:.3f}"
         if pd.notna(r1) else "Mean center_ppb vs Altitude"
@@ -918,6 +931,7 @@ def plot_altitude_relations(
     r2 = safe_corr(tbl["Altitude"], tbl["cv_w_mean"])
     ax2.set_xlabel("Altitude (m)")
     ax2.set_ylabel("Mean cv_w")
+    ax2.set_ylim(cv_lim)
     ax2.set_title(
         f"Mean cv_w vs Altitude | r={r2:.3f}"
         if pd.notna(r2) else "Mean cv_w vs Altitude"
@@ -938,7 +952,9 @@ def plot_altitude_relations(
         ax3.text(r["Altitude"], r["center_std"], str(r["station"]), fontsize=8)
     r3 = safe_corr(tbl["Altitude"], tbl["center_std"])
     ax3.set_xlabel("Altitude (m)")
-    ax3.set_ylabel("Std of center_ppb")
+    ax3.set_xlim(sp_lim)
+    ax3.set_ylabel(f"Std of {species}")
+    ax3.set_ylim(cv_lim)
     ax3.set_title(
         f"Variability of center_ppb vs Altitude | r={r3:.3f}"
         if pd.notna(r3) else "Variability of center_ppb vs Altitude"
@@ -966,7 +982,7 @@ def plot_center_timeseries_full_period(
     mode=None,
     species="O3",
     units="ppb",
-    out_path=None,
+    out_path=None,sp_lim=None,
     figsize=(14, 6)
 ):
     data = prepare_center_timeseries(
@@ -999,6 +1015,7 @@ def plot_center_timeseries_full_period(
     ax.set_title(title)
     ax.set_xlabel("Time")
     ax.set_ylabel(f"{species} ({units})")
+    ax.set_ylim(sp_lim)
     ax.tick_params(axis="x", rotation=45)
     ax.grid(True, alpha=0.3)
     ax.legend()
@@ -1028,7 +1045,8 @@ def run_full_station_analysis(
     center_col="center_ppb",
     cv_col="cv_w",
     sector_col="sector",
-    aggregate_cv_over_sectors=True,merge_years=False
+    aggregate_cv_over_sectors=True,merge_years=False,sp_lim=None,
+    cv_lim=None
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1039,7 +1057,7 @@ def run_full_station_analysis(
         center_col=center_col,
         mode=mode,
         species=species,
-        units=units,
+        units=units,sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"{station}_{species}_full_period_{center_col}.png")
     )
 
@@ -1049,7 +1067,7 @@ def run_full_station_analysis(
         stations_df=stations_df,
         center_col=center_col,
         mode=mode,
-        species=species,
+        species=species,sp_lim=SP_LIM,
         units=units,merge_years=merge_years,
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_center.png")
     )
@@ -1061,7 +1079,7 @@ def run_full_station_analysis(
         cv_col=cv_col,
         sector_col=sector_col,
         sector_type=sector_type,
-        mode=mode,
+        mode=mode,cv_lim=CV_LIM,
         species=species,merge_years=merge_years,
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_{cv_col}_by_sector.png")
     )
@@ -1072,7 +1090,7 @@ def run_full_station_analysis(
         stations=station,
         mode=mode,
         title=f"{station} monthly boxplot of {species} {units}",
-        ylabel=center_col,
+        ylabel=center_col,sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"{station}_{species}_monthly_box_{center_col}.png")
     )
 
@@ -1083,7 +1101,7 @@ def run_full_station_analysis(
         mode=mode,
         sector_type=sector_type,
         title=f"{station} monthly boxplot of coefficient of variation (%)",
-        ylabel=cv_col,
+        ylabel=cv_col,cv_lim=CV_LIM,
         out_path=os.path.join(out_dir, f"{station}_{species}_monthly_box_{cv_col}.png")
     )
 
@@ -1093,7 +1111,7 @@ def run_full_station_analysis(
         stations=station,
         mode=mode,
         title=f"{station} seasonal boxplot of {species} ({units})",
-        ylabel=f"{species} ({units})",
+        ylabel=f"{species} ({units})",sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_box_{center_col}.png")
     )
 
@@ -1104,7 +1122,7 @@ def run_full_station_analysis(
         mode=mode,
         sector_type=sector_type,
         title=f"{station} seasonal boxplot of Coefficient of variation %",
-        ylabel='CV (%)',
+        ylabel='CV (%)',sp_lim=CV_LIM,
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_box_{cv_col}.png")
     )
 
@@ -1189,7 +1207,7 @@ def run_full_multi_station_analysis(
     out_dir=".",
     center_col="center_ppb",
     cv_col="cv_w",
-    aggregate_cv_over_sectors=True,merge_years=False
+    aggregate_cv_over_sectors=True,merge_years=False,sp_lim=None,cv_lim=None
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1200,7 +1218,7 @@ def run_full_multi_station_analysis(
         center_col=center_col,
         mode=mode,
         species=species,
-        units=units,
+        units=units,sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_full_period_{center_col}.png")
     )
 
@@ -1211,7 +1229,7 @@ def run_full_multi_station_analysis(
         center_col=center_col,
         mode=mode,
         species=species,
-        units=units,merge_years=merge_years,
+        units=units,merge_years=merge_years,sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_center.png")
     )
 
@@ -1221,7 +1239,7 @@ def run_full_multi_station_analysis(
         stations=stations,
         mode=mode,
         title=f"Multi-station monthly boxplot of {center_col}",
-        ylabel=center_col,
+        ylabel=center_col,sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_monthly_box_{center_col}.png")
     )
 
@@ -1232,7 +1250,7 @@ def run_full_multi_station_analysis(
         mode=mode,
         sector_type=sector_type,
         title=f"Multi-station monthly boxplot of {cv_col}",
-        ylabel=cv_col,
+        ylabel=cv_col,cv_lim=CV_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_monthly_box_{cv_col}.png")
     )
 
@@ -1242,7 +1260,7 @@ def run_full_multi_station_analysis(
         stations=stations,
         mode=mode,
         title=f"Multi-station seasonal boxplot of {center_col}",
-        ylabel=center_col,
+        ylabel=center_col,sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{center_col}.png")
     )
 
@@ -1253,7 +1271,7 @@ def run_full_multi_station_analysis(
         mode=mode,
         sector_type=sector_type,
         title=f"Multi-station seasonal boxplot of {cv_col}",
-        ylabel=cv_col,
+        ylabel=cv_col,cv_lim=CV_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{cv_col}.png")
     )
 
@@ -1262,7 +1280,7 @@ def run_full_multi_station_analysis(
         stations=stations,
         mode=mode,
         sector_type=sector_type,
-        aggregate_cv_over_sectors=aggregate_cv_over_sectors,
+        aggregate_cv_over_sectors=aggregate_cv_over_sectors,cv_lim=CV_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_scatter_{center_col}_vs_{cv_col}.png")
     )
 
@@ -1271,7 +1289,7 @@ def run_full_multi_station_analysis(
         stations=stations,
         mode=mode,
         sector_type=sector_type,
-        aggregate_cv_over_sectors=aggregate_cv_over_sectors,
+        aggregate_cv_over_sectors=aggregate_cv_over_sectors,cv_lim=CV_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_scatter_{center_col}_vs_{cv_col}_by_season.png")
     )
 
@@ -1280,7 +1298,7 @@ def run_full_multi_station_analysis(
         stations=stations,
         mode=mode,
         sector_type=sector_type,
-        aggregate_cv_over_sectors=aggregate_cv_over_sectors,
+        aggregate_cv_over_sectors=aggregate_cv_over_sectors,cv_lim=CV_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_scatter_{center_col}_vs_{cv_col}_by_month.png")
     )
 
@@ -1320,7 +1338,7 @@ def run_full_multi_station_analysis(
         mode=mode,
         sector_type=sector_type,
         center_col=center_col,
-        cv_col=cv_col,
+        cv_col=cv_col,sp_lim=sp_lim,cv_lim=cv_lim,
         out_prefix=os.path.join(out_dir, f"multi_station_{species}_altitude")
     )
 
@@ -1371,7 +1389,7 @@ if __name__ == "__main__":
             cv_col=CV_COL,
             sector_col=SECTOR_COL,
             aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS,
-                        merge_years=MERGE_SEASONAL_YEARS
+                        merge_years=MERGE_SEASONAL_YEARS,sp_lim=SP_LIM,cv_lim=CV_LIM
         )
 
     if RUN_MODE in ["multi", "both"]:
@@ -1395,6 +1413,6 @@ if __name__ == "__main__":
             center_col=CENTER_COL,
             cv_col=CV_COL,
             aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS,
-                        merge_years=MERGE_SEASONAL_YEARS)
+                        merge_years=MERGE_SEASONAL_YEARS,sp_lim=SP_LIM,cv_lim=CV_LIM)
         
 # %%

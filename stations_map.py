@@ -1,7 +1,7 @@
 #%%
 import pandas as pd
 import folium
-from folium.plugins import MarkerCluster, Search
+from folium.plugins import MarkerCluster
 #%%
 name_st=["1006A","2629A"]
 
