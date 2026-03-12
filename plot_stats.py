@@ -17,7 +17,7 @@ species = "O3"
 mode = "A"
 units = "ppb"
 
-station = "1461A"
+station = "1006A"
 stations = ["1461A", "1006A", "2686A"]
 
 SECTOR_TYPE = "CUM"
@@ -25,7 +25,7 @@ CENTER_COL = "center_ppb"
 CV_COL = "cv_w"
 SECTOR_COL = "sector"
 AGGREGATE_CV_OVER_SECTORS = True
-
+MERGE_SEASONAL_YEARS = True
 PLOTS_DIR = "/home/agkiokas/CAMS/plots"
 STATIONS_PATH = "/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt"
 
@@ -225,7 +225,38 @@ def make_red_pink_gradient(n=10):
         colors.append((r, gb, gb))
     return [to_hex(c) for c in colors]
 
+# ============================================================
+# 5b. HELPER FOR SEASONAL X-AXIS
+# ============================================================
+def build_season_plot_axis(sub: pd.DataFrame, merge_years: bool = False):
+    """
+    Returns x-values and tick info for seasonal plots.
 
+    If merge_years=False:
+        x is the real timestamp.
+
+    If merge_years=True:
+        all rows are ordered by year/timestamp inside the season and
+        plotted on a continuous synthetic axis (0, 1, 2, ...),
+        so repeated winters/springs/etc. are concatenated without gaps.
+    """
+    sub = sub.sort_values("timestamp").copy()
+
+    if not merge_years:
+        return {
+            "x": sub["timestamp"].values,
+            "tick_positions": None,
+            "tick_labels": None
+        }
+
+    sub["__plot_x"] = np.arange(len(sub))
+    year_starts = sub.groupby("year")["__plot_x"].min().reset_index()
+
+    return {
+        "x": sub["__plot_x"].values,
+        "tick_positions": year_starts["__plot_x"].tolist(),
+        "tick_labels": year_starts["year"].astype(str).tolist()
+    }
 # ============================================================
 # 6. DATA PREPARATION
 # ============================================================
@@ -423,7 +454,8 @@ def altitude_relation_table(
 # ============================================================
 def plot_one_station_seasonal_center(
     df, station, stations_df=None, center_col="center_ppb", mode=None,
-    species="O3", units="ppb", out_path=None, figsize=(16, 10)
+    species="O3", units="ppb", out_path=None, figsize=(16, 10),
+    merge_years=False
 ):
     data = prepare_center_timeseries(df, stations=station, center_col=center_col, mode=mode)
 
@@ -438,14 +470,17 @@ def plot_one_station_seasonal_center(
     axes = axes.ravel()
 
     for ax, season in zip(axes, seasons):
-        sub = data[data["season"] == season].sort_values("timestamp")
+        sub = data[data["season"] == season].sort_values("timestamp").copy()
 
         if sub.empty:
             ax.set_title(f"{season} (no data)")
             ax.grid(True, alpha=0.3)
             continue
 
-        ax.plot(sub["timestamp"], sub[center_col], label=station)
+        axis_info = build_season_plot_axis(sub, merge_years=merge_years)
+        x = axis_info["x"]
+
+        ax.plot(x, sub[center_col].values, label=station)
         stats = compute_basic_stats(sub[center_col])
 
         ax.text(
@@ -459,23 +494,33 @@ def plot_one_station_seasonal_center(
             title += f" ({altitude:.0f} m)"
 
         ax.set_title(title)
-        ax.set_xlabel("Time")
         ax.set_ylabel(f"{species} ({units})")
-        ax.tick_params(axis="x", rotation=45)
         ax.grid(True, alpha=0.3)
 
-    fig.suptitle(f"{species} center pixel seasonal timeseries - {station}", y=1.02)
+        if merge_years:
+            ax.set_xlabel("Concatenated seasonal timeline")
+            if axis_info["tick_positions"] is not None:
+                ax.set_xticks(axis_info["tick_positions"])
+                ax.set_xticklabels(axis_info["tick_labels"], rotation=45)
+        else:
+            ax.set_xlabel("Time")
+            ax.tick_params(axis="x", rotation=45)
+
+    suffix = "merged by season" if merge_years else "real timestamps"
+    fig.suptitle(f"{species} center pixel seasonal timeseries - {station} ({suffix})", y=1.02)
     fig.tight_layout()
+
     if out_path:
         ensure_dir(out_path)
         fig.savefig(out_path, dpi=200, bbox_inches="tight")
+
     plt.show()
     return fig, axes
 
-
 def plot_multi_station_seasonal_center(
     df, stations, stations_df=None, center_col="center_ppb", mode=None,
-    species="O3", units="ppb", out_path=None, figsize=(16, 10)
+    species="O3", units="ppb", out_path=None, figsize=(16, 10),
+    merge_years=False
 ):
     data = prepare_center_timeseries(df, stations=stations, center_col=center_col, mode=mode)
 
@@ -496,11 +541,16 @@ def plot_multi_station_seasonal_center(
             continue
 
         for st, g in sub.groupby("station"):
+            g = g.sort_values("timestamp").copy()
+            axis_info = build_season_plot_axis(g, merge_years=merge_years)
+            x = axis_info["x"]
+
             label = f"{st}"
             alt = alt_map.get(st, np.nan)
             if pd.notna(alt):
                 label += f" ({alt:.0f} m)"
-            ax.plot(g["timestamp"], g[center_col], label=label)
+
+            ax.plot(x, g[center_col].values, label=label)
 
         stats = compute_basic_stats(sub[center_col])
         ax.text(
@@ -510,29 +560,44 @@ def plot_multi_station_seasonal_center(
         )
 
         ax.set_title(season)
-        ax.set_xlabel("Time")
         ax.set_ylabel(f"{species} ({units})")
-        ax.tick_params(axis="x", rotation=45)
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8)
 
-    fig.suptitle(f"{species} center pixel seasonal timeseries - multiple stations", y=1.02)
+        if merge_years:
+            # use the first station only to create year ticks
+            first_station = next(iter(sub.groupby("station")))[1].sort_values("timestamp").copy()
+            axis_info = build_season_plot_axis(first_station, merge_years=True)
+            ax.set_xlabel("Concatenated seasonal timeline")
+            if axis_info["tick_positions"] is not None:
+                ax.set_xticks(axis_info["tick_positions"])
+                ax.set_xticklabels(axis_info["tick_labels"], rotation=45)
+        else:
+            ax.set_xlabel("Time")
+            ax.tick_params(axis="x", rotation=45)
+
+    suffix = "merged by season" if merge_years else "real timestamps"
+    fig.suptitle(f"{species} center pixel seasonal timeseries - multiple stations ({suffix})", y=1.02)
     fig.tight_layout()
+
     if out_path:
         ensure_dir(out_path)
         fig.savefig(out_path, dpi=200, bbox_inches="tight")
+
     plt.show()
     return fig, axes
-
-
 # ============================================================
 # 9. PLOT: CV_W BY SECTOR PER SEASON
 # ============================================================
 def plot_one_station_seasonal_cv_by_sector(
     df, station, stations_df=None, cv_col="cv_w", sector_col="sector",
-    sector_type="CUM", mode=None, species="O3", out_path=None, figsize=(16, 10)
+    sector_type="CUM", mode=None, species="O3", out_path=None, figsize=(16, 10),
+    merge_years=False
 ):
-    data = prepare_cv_by_sector(df, station=station, cv_col=cv_col, sector_col=sector_col, sector_type=sector_type, mode=mode)
+    data = prepare_cv_by_sector(
+        df, station=station, cv_col=cv_col, sector_col=sector_col,
+        sector_type=sector_type, mode=mode
+    )
 
     altitude = np.nan
     if stations_df is not None:
@@ -557,31 +622,49 @@ def plot_one_station_seasonal_cv_by_sector(
             continue
 
         for sec in all_sectors:
-            ss = sub[sub[sector_col] == sec].sort_values("timestamp")
+            ss = sub[sub[sector_col] == sec].sort_values("timestamp").copy()
             if ss.empty:
                 continue
-            ax.plot(ss["timestamp"], ss[cv_col], label=str(sec), color=color_map[sec])
+
+            axis_info = build_season_plot_axis(ss, merge_years=merge_years)
+            x = axis_info["x"]
+
+            ax.plot(x, ss[cv_col].values, label=str(sec), color=color_map[sec])
 
         title = f"{season} | {station}"
         if pd.notna(altitude):
             title += f" ({altitude:.0f} m)"
 
         ax.set_title(title)
-        ax.set_xlabel("Time")
         ax.set_ylabel(cv_col)
-        ax.tick_params(axis="x", rotation=45)
         ax.grid(True, alpha=0.3)
         ax.legend(title="Sector", fontsize=8, ncol=2)
 
-    fig.suptitle(f"{species} seasonal {cv_col} by sector - {station} - sector_type={sector_type}", y=1.02)
+        if merge_years:
+            first_sector = sub[sub[sector_col] == all_sectors[0]].sort_values("timestamp").copy()
+            if not first_sector.empty:
+                axis_info = build_season_plot_axis(first_sector, merge_years=True)
+                ax.set_xlabel("Concatenated seasonal timeline")
+                if axis_info["tick_positions"] is not None:
+                    ax.set_xticks(axis_info["tick_positions"])
+                    ax.set_xticklabels(axis_info["tick_labels"], rotation=45)
+        else:
+            ax.set_xlabel("Time")
+            ax.tick_params(axis="x", rotation=45)
+
+    suffix = "merged by season" if merge_years else "real timestamps"
+    fig.suptitle(
+        f"{species} seasonal {cv_col} by sector - {station} - sector_type={sector_type} ({suffix})",
+        y=1.02
+    )
     fig.tight_layout()
+
     if out_path:
         ensure_dir(out_path)
         fig.savefig(out_path, dpi=200, bbox_inches="tight")
+
     plt.show()
     return fig, axes
-
-
 # ============================================================
 # 10. BOXPLOTS: MONTH / SEASON
 # ============================================================
@@ -906,7 +989,7 @@ def plot_center_timeseries_full_period(
             label = f"{st} ({alt:.0f} m)"
         ax.plot(sub["timestamp"], sub[center_col], label=label)
 
-    title = f"{species} full-period timeseries of {center_col}"
+    title = f"{species} full-period timeseries of the central grid cell"
     if stations is not None:
         if isinstance(stations, str):
             title += f" - {stations}"
@@ -945,7 +1028,7 @@ def run_full_station_analysis(
     center_col="center_ppb",
     cv_col="cv_w",
     sector_col="sector",
-    aggregate_cv_over_sectors=True,
+    aggregate_cv_over_sectors=True,merge_years=False
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -967,7 +1050,7 @@ def run_full_station_analysis(
         center_col=center_col,
         mode=mode,
         species=species,
-        units=units,
+        units=units,merge_years=merge_years,
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_center.png")
     )
 
@@ -979,7 +1062,7 @@ def run_full_station_analysis(
         sector_col=sector_col,
         sector_type=sector_type,
         mode=mode,
-        species=species,
+        species=species,merge_years=merge_years,
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_{cv_col}_by_sector.png")
     )
 
@@ -1106,7 +1189,7 @@ def run_full_multi_station_analysis(
     out_dir=".",
     center_col="center_ppb",
     cv_col="cv_w",
-    aggregate_cv_over_sectors=True,
+    aggregate_cv_over_sectors=True,merge_years=False
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1128,7 +1211,7 @@ def run_full_multi_station_analysis(
         center_col=center_col,
         mode=mode,
         species=species,
-        units=units,
+        units=units,merge_years=merge_years,
         out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_center.png")
     )
 
@@ -1287,7 +1370,8 @@ if __name__ == "__main__":
             center_col=CENTER_COL,
             cv_col=CV_COL,
             sector_col=SECTOR_COL,
-            aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS
+            aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS,
+                        merge_years=MERGE_SEASONAL_YEARS
         )
 
     if RUN_MODE in ["multi", "both"]:
@@ -1310,6 +1394,7 @@ if __name__ == "__main__":
             out_dir=out_dir_multi,
             center_col=CENTER_COL,
             cv_col=CV_COL,
-            aggregate_cv_over_seCTORS=AGGREGATE_CV_OVER_SECTORS
-        )
+            aggregate_cv_over_seCTORS=AGGREGATE_CV_OVER_SECTORS,
+                        merge_years=MERGE_SEASONAL_YEARS)
+        
 # %%
