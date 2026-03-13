@@ -164,7 +164,6 @@ def plot_variable_on_map(
     lon_min, lon_max = lon_s - d, lon_s + d
     lat_min, lat_max = lat_s - d, lat_s + d
     ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
-
     # --- ocean background first (so masked sea shows this color) ---
     ax.add_feature(cfeature.OCEAN, facecolor="lightblue", zorder=-2)
 

@@ -17,8 +17,8 @@ species = "O3"
 mode = "A"
 units = "ppb"
 
-station = "2629A"
-stations = ["1461A","2629A","2686A"]
+station = "1006A"
+stations = ["1006A","2629A"]
 
 SECTOR_TYPE = "CUM"
 CENTER_COL = "center_ppb"
@@ -26,13 +26,14 @@ CV_COL = "cv_w"
 SECTOR_COL = "sector"
 AGGREGATE_CV_OVER_SECTORS = True
 MERGE_SEASONAL_YEARS = True
-SP_LIM=(0,200)
-CV_LIM=(0,2)
-
+SP_LIM=(20,100)
+CV_LIM=(0,10)
+RATIO_LIM=(0.75,1.25)
 PLOTS_DIR = "/home/agkiokas/CAMS/plots"
 STATIONS_PATH = "/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt"
 out_dir_one = f"{PLOTS_DIR}/full_analysis_one_station"
 out_dir_multi = f"{PLOTS_DIR}/full_analysis_multi_station"
+showfliers=False
 #%%
 # 1. STATIONS LOADER
 # ============================================================
@@ -633,7 +634,7 @@ def plot_one_station_seasonal_cv_by_sector(
             axis_info = build_season_plot_axis(ss, merge_years=merge_years)
             x = axis_info["x"]
 
-            ax.plot(x, ss[cv_col].values, label=str(sec), color=color_map[sec])
+            ax.plot(x, ss[cv_col].values*100, label=str(sec), color=color_map[sec])
 
         title = f"{season} | {station}"
         if pd.notna(altitude):
@@ -691,15 +692,20 @@ def plot_monthly_boxplot(df, value_col, stations=None, mode=None, sector_type=No
     out = out.dropna(subset=[value_col])
 
     months = list(range(1, 13))
-    data = [out.loc[out["month"] == m, value_col].dropna().values for m in months]
-
+    if value_col == "cv_w":
+        data = [out.loc[out["month"] == m, value_col].dropna().values * 100.0 for m in months]
+    else:
+        data = [out.loc[out["month"] == m, value_col].dropna().values for m in months]
     fig, ax = plt.subplots(figsize=figsize)
-    ax.boxplot(data, tick_labels=[calendar.month_abbr[m] for m in months])
+    ax.boxplot(data, tick_labels=[calendar.month_abbr[m] for m in months],showfliers=False)
     ax.set_xlabel("Month")
     ax.set_ylabel(ylabel or f"{species} ({units})" )
     ax.set_title(title or f"Monthly boxplot of {species} ({units}) ")
     ax.grid(True, alpha=0.3)
-    ax.set_ylim(sp_lim)
+    if sp_lim is not None:
+        ax.set_ylim(sp_lim)
+    else:
+        ax.set_ylim(cv_lim)    
     fig.tight_layout()
     if out_path:
         ensure_dir(out_path)
@@ -726,14 +732,19 @@ def plot_seasonal_boxplot(df, value_col, stations=None, mode=None, sector_type=N
     out = out.dropna(subset=[value_col])
 
     seasons = ["Winter", "Spring", "Summer", "Autumn"]
-    data = [out.loc[out["season"] == s, value_col].dropna().values for s in seasons]
+    if value_col == "cv_w":
+        data = [out.loc[out["season"] == s, value_col].dropna().values * 100.0 for s in seasons]
+    else:
+        data = [out.loc[out["season"] == s, value_col].dropna().values for s in seasons]
 
     fig, ax = plt.subplots(figsize=figsize)
-    ax.boxplot(data, tick_labels=seasons)
+    ax.boxplot(data, tick_labels=seasons,showfliers=False)
     ax.set_xlabel("Season")
-    ax.set_ylabel(ylabel or value_col)
-    if cv_lim is not None:
-        ax.set_ylim(cv_lim)   
+    ax.set_ylabel(ylabel or 'CV(%)')
+    if sp_lim is not None:
+        ax.set_ylim(sp_lim)   
+    if cv_lim is not None:  
+        ax.set_ylim(cv_lim)  
     ax.set_title(title or f"Seasonal boxplot of CV")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
@@ -765,10 +776,10 @@ def plot_center_vs_cv_scatter(
     fig, ax = plt.subplots(figsize=figsize)
     if "station" in pairs.columns:
         for st, g in pairs.groupby("station"):
-            ax.scatter(g["center_ppb"], g["cv_w"], alpha=0.6, label=st)
+            ax.scatter(g["center_ppb"], g["cv_w"]*100.0, alpha=0.6, label=st)
         ax.legend(fontsize=8)
     else:
-        ax.scatter(pairs["center_ppb"], pairs["cv_w"], alpha=0.6)
+        ax.scatter(pairs["center_ppb"], pairs["cv_w"]*100.0, alpha=0.6)
 
     ax.set_xlabel("O3 (ppb)")
     ax.set_xlim(sp_lim)
@@ -809,9 +820,9 @@ def plot_center_vs_cv_scatter_by_season(
         if not sub.empty:
             if "station" in sub.columns:
                 for st, g in sub.groupby("station"):
-                    ax.scatter(g["center_ppb"], g["cv_w"], alpha=0.6, label=st)
+                    ax.scatter(g["center_ppb"], g["cv_w"]*100.0, alpha=0.6, label=st)
             else:
-                ax.scatter(sub["center_ppb"], sub["cv_w"], alpha=0.6)
+                ax.scatter(sub["center_ppb"], sub["cv_w"]*100.0, alpha=0.6)
 
         ax.set_title(f"{season} | r={corr:.3f}" if pd.notna(corr) else f"{season} | r=nan")
         ax.set_xlabel("O3 central cell (ppb)")
@@ -857,9 +868,9 @@ def plot_center_vs_cv_scatter_by_month(
         if not sub.empty:
             if "station" in sub.columns:
                 for st, g in sub.groupby("station"):
-                    ax.scatter(g["center_ppb"], g["cv_w"], alpha=0.6, label=st)
+                    ax.scatter(g["center_ppb"], g["cv_w"]*100.0, alpha=0.6, label=st)
             else:
-                ax.scatter(sub["center_ppb"], sub["cv_w"], alpha=0.6)
+                ax.scatter(sub["center_ppb"], sub["cv_w"]*100.0, alpha=0.6)
 
         ax.set_title(f"{calendar.month_abbr[m]} | r={corr:.3f}" if pd.notna(corr) else f"{calendar.month_abbr[m]} | r=nan")
         ax.set_xlabel("O3 (ppb)")
@@ -925,15 +936,15 @@ def plot_altitude_relations(
 
     # cv_w_mean vs altitude
     fig2, ax2 = plt.subplots(figsize=figsize)
-    ax2.scatter(tbl["Altitude"], tbl["cv_w_mean"], alpha=0.8)
+    ax2.scatter(tbl["Altitude"], tbl["cv_w_mean"]*100, alpha=0.8)
     for _, r in tbl.iterrows():
         ax2.text(r["Altitude"], r["cv_w_mean"], str(r["station"]), fontsize=8)
     r2 = safe_corr(tbl["Altitude"], tbl["cv_w_mean"])
     ax2.set_xlabel("Altitude (m)")
-    ax2.set_ylabel("Mean cv_w")
+    ax2.set_ylabel("Mean CV(%)")
     ax2.set_ylim(cv_lim)
     ax2.set_title(
-        f"Mean cv_w vs Altitude | r={r2:.3f}"
+        f"Mean CV vs Altitude | r={r2:.3f}"
         if pd.notna(r2) else "Mean cv_w vs Altitude"
     )
     ax2.grid(True, alpha=0.3)
@@ -1029,7 +1040,102 @@ def plot_center_timeseries_full_period(
     plt.show()
     return fig, ax
 
+#12c.RATIO PLOTTING
+def plot_one_station_ratio_meanw_to_center(
+    df,
+    station,
+    stations_df=None,
+    center_col="center_ppb",
+    mean_col="mean_w",
+    sector_col="sector",
+    sector_type="CUM",
+    mode=None,
+    species="O3",
+    out_path=None,
+    figsize=(14, 6),
+    merge_years=False,
+    ratio_lim=None
+):
+    out = df.copy()
+    out = out[out["station"] == station]
 
+    if mode is not None and "mode" in out.columns:
+        out = out[out["mode"] == mode]
+
+    if sector_type is not None and "sector_typ" in out.columns:
+        out = out[out["sector_typ"] == sector_type]
+
+    out = out.dropna(subset=["timestamp", center_col, mean_col, sector_col]).copy()
+
+    # avoid division by zero
+    out = out[pd.to_numeric(out[mean_col], errors="coerce") != 0].copy()
+
+    out["ratio_meanw_to_center"] = out[mean_col] / out[center_col]
+    out = add_time_features(out)
+
+    altitude = np.nan
+    if stations_df is not None:
+        row = stations_df.loc[stations_df["Station_Name"] == station]
+        if not row.empty:
+            altitude = row["Altitude"].iloc[0]
+
+    all_sectors = get_sector_order(out[sector_col].dropna().unique())
+    colors = make_red_pink_gradient(len(all_sectors))
+    color_map = dict(zip(all_sectors, colors))
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for sec in all_sectors:
+        ss = out[out[sector_col] == sec].sort_values("timestamp").copy()
+        if ss.empty:
+            continue
+
+        if merge_years:
+            axis_info = build_season_plot_axis(ss, merge_years=True)
+            x = axis_info["x"]
+        else:
+            x = ss["timestamp"].values
+
+        ax.plot(
+            x,
+            ss["ratio_meanw_to_center"].values,
+            label=str(sec),
+            color=color_map[sec]
+        )
+
+    title = f"{species} Ratio mean to central gridcell by sector | {station}"
+    if pd.notna(altitude):
+        title += f" ({altitude:.0f} m)"
+    if sector_type is not None:
+        title += f" | sector_type={sector_type}"
+
+    ax.set_title(title)
+    ax.set_xlabel("Concatenated timeline" if merge_years else "Time")
+    ax.set_ylabel("Mean/central grid cell")
+    ax.grid(True, alpha=0.3)
+    ax.legend(title="Sector", fontsize=8, ncol=2)
+
+    if merge_years:
+        first_sector = out[out[sector_col] == all_sectors[0]].sort_values("timestamp").copy()
+        if not first_sector.empty:
+            axis_info = build_season_plot_axis(first_sector, merge_years=True)
+            if axis_info["tick_positions"] is not None:
+                ax.set_xticks(axis_info["tick_positions"])
+                ax.set_xticklabels(axis_info["tick_labels"], rotation=45)
+    else:
+        ax.tick_params(axis="x", rotation=45)
+
+    if ratio_lim is not None:
+        ax.set_ylim(ratio_lim)
+
+    fig.tight_layout()
+
+    if out_path:
+        ensure_dir(out_path)
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
+
+    plt.show()
+    return fig, ax
 # ============================================================
 # 13. WRAPPERS: RUN EVERYTHING AUTOMATICALLY
 # ============================================================
@@ -1046,7 +1152,7 @@ def run_full_station_analysis(
     cv_col="cv_w",
     sector_col="sector",
     aggregate_cv_over_sectors=True,merge_years=False,sp_lim=None,
-    cv_lim=None
+    cv_lim=None,ratio_lim=None
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1060,7 +1166,19 @@ def run_full_station_analysis(
         units=units,sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"{station}_{species}_full_period_{center_col}.png")
     )
-
+    plot_one_station_ratio_meanw_to_center(
+        df=df_one,
+        station=station,
+        stations_df=stations_df,
+        center_col="center_ppb",
+        mean_col="mean_w",
+        sector_col="sector",
+        sector_type="CUM",
+        mode=mode,ratio_lim=RATIO_LIM,
+        species=species,
+        out_path=f"{out_dir_one}/{station}_{species}_ratio_center_to_meanw_by_sector.png",
+        merge_years=False
+)
     plot_one_station_seasonal_center(
         df=df,
         station=station,
@@ -1090,7 +1208,7 @@ def run_full_station_analysis(
         stations=station,
         mode=mode,
         title=f"{station} monthly boxplot of {species} {units}",
-        ylabel=center_col,sp_lim=SP_LIM,
+        ylabel=f"{species} {units}",sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"{station}_{species}_monthly_box_{center_col}.png")
     )
 
@@ -1101,7 +1219,7 @@ def run_full_station_analysis(
         mode=mode,
         sector_type=sector_type,
         title=f"{station} monthly boxplot of coefficient of variation (%)",
-        ylabel=cv_col,cv_lim=CV_LIM,
+        ylabel='CV(%)',cv_lim=CV_LIM,
         out_path=os.path.join(out_dir, f"{station}_{species}_monthly_box_{cv_col}.png")
     )
 
@@ -1122,7 +1240,7 @@ def run_full_station_analysis(
         mode=mode,
         sector_type=sector_type,
         title=f"{station} seasonal boxplot of Coefficient of variation %",
-        ylabel='CV (%)',sp_lim=CV_LIM,
+        ylabel='CV (%)',cv_lim=cv_lim,
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_box_{cv_col}.png")
     )
 
@@ -1130,7 +1248,7 @@ def run_full_station_analysis(
         df=df,
         stations=station,
         mode=mode,
-        sector_type=sector_type,
+        sector_type=sector_type,cv_lim=cv_lim,sp_lim=sp_lim,
         aggregate_cv_over_sectors=aggregate_cv_over_sectors,
         out_path=os.path.join(out_dir, f"{station}_{species}_scatter_{center_col}_vs_{cv_col}.png")
     )
@@ -1139,16 +1257,16 @@ def run_full_station_analysis(
         df=df,
         stations=station,
         mode=mode,
-        sector_type=sector_type,
+        sector_type=sector_type,sp_lim=sp_lim,cv_lim=cv_lim,
         aggregate_cv_over_sectors=aggregate_cv_over_sectors,
         out_path=os.path.join(out_dir, f"{station}_{species}_scatter_{center_col}_vs_{cv_col}_by_season.png")
     )
-
+    
     pairs_month, _, _ = plot_center_vs_cv_scatter_by_month(
         df=df,
         stations=station,
         mode=mode,
-        sector_type=sector_type,
+        sector_type=sector_type,sp_lim=sp_lim,cv_lim=cv_lim,
         aggregate_cv_over_sectors=aggregate_cv_over_sectors,
         out_path=os.path.join(out_dir, f"{station}_{species}_scatter_{center_col}_vs_{cv_col}_by_month.png")
     )
@@ -1387,7 +1505,7 @@ if __name__ == "__main__":
             out_dir=out_dir_one,
             center_col=CENTER_COL,
             cv_col=CV_COL,
-            sector_col=SECTOR_COL,
+            sector_col=SECTOR_COL,ratio_lim=RATIO_LIM,
             aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS,
                         merge_years=MERGE_SEASONAL_YEARS,sp_lim=SP_LIM,cv_lim=CV_LIM
         )

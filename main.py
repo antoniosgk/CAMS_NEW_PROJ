@@ -55,7 +55,7 @@ from io_netcdf import df30min_to_netcdf_station_species
 # -----------------------
 # USER SETTINGS
 # -----------------------
-RUN_PERIOD = True
+RUN_PERIOD = False
 
 # Period settings (only used when RUN_PERIOD=True)
 START_DT = datetime.datetime(2005, 5, 16, 0, 0)  #yyyy,m,d,hr,min
@@ -65,7 +65,7 @@ print("END_DT:", END_DT)
 print("Generated timestamps:", list(iter_timestamps(START_DT, END_DT, 30)))
 # Mode works for BOTH single timestep and period
 MODE = "A"          # "A" or "HEIGHT"
-idx = 1934
+idx = 5
 cell_nums = 10
 dist_bins_km = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 out_dir = "/home/agkiokas/CAMS/plots/"
@@ -120,8 +120,8 @@ def run_single_timestep(mode="A", weighted=True):
     """
     # ---- local plotting settings (same as your old main) ----
     d_zoom_species = 0.8
-    d_zoom_topo = 30.0
-    zoom_map = 45.0
+    d_zoom_topo =45 #fig 3 zoom and terrain
+    zoom_map = 10 #for fig4
     fig4_with_topo = True # set True if you want station map on topo background
 
     stations = load_stations(stations_path)
@@ -402,8 +402,9 @@ def run_single_timestep(mode="A", weighted=True):
 
         lon_min, lon_max = lon_s - zoom_map, lon_s + zoom_map
         lat_min, lat_max = lat_s - zoom_map, lat_s + zoom_map
-        st = st[st["Longitude"].between(lon_min, lon_max) & st["Latitude"].between(lat_min, lat_max)]
+        ax4.set_extent([lon_min, lon_max, lat_min, lat_max], crs=proj)
 
+        st = st[st["Longitude"].between(lon_min, lon_max) & st["Latitude"].between(lat_min, lat_max)]
         ax4.scatter(
             st["Longitude"].values,
             st["Latitude"].values,
@@ -418,17 +419,16 @@ def run_single_timestep(mode="A", weighted=True):
         ax4.scatter(
             [lon_s],
             [lat_s],
-            s=45,
-            c="red",
+            s=60,
+            c="blue",
             edgecolors="k",
             linewidths=0.6,
             transform=proj,
             zorder=7,
             label=f"Selected: {name}",
         )
-
         ax4.legend(loc="upper right")
-        ax4.set_title("Stations context map", pad=18)
+        ax4.set_title("Stations map", pad=18)
         plt.show()
         #HERE PUT 2 PROFILE PLOTS
     
