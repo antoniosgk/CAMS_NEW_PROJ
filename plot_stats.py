@@ -12,7 +12,7 @@ from matplotlib.colors import to_hex
 # ============================================================
 # USER INPUTS
 # ============================================================
-RUN_MODE = "one"          # "one", "multi", "both"
+RUN_MODE = "multi"          # "one", "multi", "both"
 species = "O3"
 mode = "A"
 units = "ppb"
@@ -451,7 +451,146 @@ def altitude_relation_table(
     )
     return grouped
 
+#HELPER HOURLY STATS/FUNCTIONS
+#-----------------------------------------------------------
+def prepare_diurnal_cycle(df, stations=None, center_col="center_ppb", mode=None):
+    out = df.copy()
 
+    if stations is not None:
+        if isinstance(stations, str):
+            stations = [stations]
+        out = out[out["station"].isin(stations)]
+
+    if mode is not None and "mode" in out.columns:
+        out = out[out["mode"] == mode]
+
+    out = out.dropna(subset=["timestamp", center_col]).copy()
+
+    # one center value per station/timestamp
+    out = (
+        out.groupby(["station", "timestamp"], as_index=False)[center_col]
+        .mean()
+    )
+
+    out = add_time_features(out)
+    return out
+def plot_one_station_diurnal_cycle(
+    df, station, center_col="center_ppb", mode=None,
+    species="O3", units="ppb", out_path=None, figsize=(10, 5),
+    sp_lim=None
+):
+    out = prepare_diurnal_cycle(df, stations=station, center_col=center_col, mode=mode)
+
+    grp = (
+        out.groupby("hour")[center_col]
+        .agg(["mean", "std", "count"])
+        .reset_index()
+    )
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.plot(grp["hour"], grp["mean"], marker="o")
+    ax.set_xticks(range(24))
+    ax.set_xlabel("Hour of day")
+    ax.set_ylabel(f"{species} ({units})")
+    ax.set_title(f"Diurnal cycle of {center_col} - {station}")
+    ax.grid(True, alpha=0.3)
+
+    if sp_lim is not None:
+        ax.set_ylim(sp_lim)
+
+    fig.tight_layout()
+    if out_path:
+        ensure_dir(out_path)
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.show()
+    return fig, ax, grp
+def plot_one_station_diurnal_cycle_by_season(
+    df, station, center_col="center_ppb", mode=None,
+    species="O3", units="ppb", out_path=None, figsize=(12, 8),
+    sp_lim=None
+):
+    out = prepare_diurnal_cycle(df, stations=station, center_col=center_col, mode=mode)
+
+    seasons = ["Winter", "Spring", "Summer", "Autumn"]
+    fig, axes = plt.subplots(2, 2, figsize=figsize, sharex=True, sharey=True)
+    axes = axes.ravel()
+
+    for ax, season in zip(axes, seasons):
+        sub = out[out["season"] == season]
+        grp = sub.groupby("hour")[center_col].mean().reset_index()
+
+        ax.plot(grp["hour"], grp[center_col], marker="o")
+        ax.set_title(season)
+        ax.set_xticks(range(24))
+        ax.set_xlabel("Hour")
+        ax.set_ylabel(f"{species} ({units})")
+        ax.grid(True, alpha=0.3)
+
+        if sp_lim is not None:
+            ax.set_ylim(sp_lim)
+
+    fig.suptitle(f"Diurnal cycle of {center_col} by season - {station}", y=1.02)
+    fig.tight_layout()
+
+    if out_path:
+        ensure_dir(out_path)
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.show()
+    return fig, axes
+def plot_multi_station_diurnal_cycle(
+    df, stations, center_col="center_ppb", mode=None,
+    species="O3", units="ppb", out_path=None, figsize=(10, 5),
+    sp_lim=None
+):
+    out = prepare_diurnal_cycle(df, stations=stations, center_col=center_col, mode=mode)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for st, g in out.groupby("station"):
+        grp = g.groupby("hour")[center_col].mean().reset_index()
+        ax.plot(grp["hour"], grp[center_col], marker="o", label=st)
+
+    ax.set_xticks(range(24))
+    ax.set_xlabel("Hour of day")
+    ax.set_ylabel(f"{species} ({units})")
+    ax.set_title(f"Diurnal cycle of {center_col} - multiple stations")
+    ax.grid(True, alpha=0.3)
+    ax.legend()
+
+    if sp_lim is not None:
+        ax.set_ylim(sp_lim)
+
+    fig.tight_layout()
+    if out_path:
+        ensure_dir(out_path)
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.show()
+    return fig, ax
+def plot_one_station_diurnal_boxplot(
+    df, station, center_col="center_ppb", mode=None,
+    species="O3", units="ppb", out_path=None, figsize=(12, 5),
+    sp_lim=None
+):
+    out = prepare_diurnal_cycle(df, stations=station, center_col=center_col, mode=mode)
+
+    data = [out.loc[out["hour"] == h, center_col].dropna().values for h in range(24)]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.boxplot(data, tick_labels=list(range(24)))
+    ax.set_xlabel("Hour of day")
+    ax.set_ylabel(f"{species} ({units})")
+    ax.set_title(f"Diurnal distribution of {center_col} - {station}")
+    ax.grid(True, alpha=0.3)
+
+    if sp_lim is not None:
+        ax.set_ylim(sp_lim)
+
+    fig.tight_layout()
+    if out_path:
+        ensure_dir(out_path)
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.show()
+    return fig, ax
 # ============================================================
 # 8. PLOTS: SEASONAL TIMESERIES
 # ============================================================
@@ -555,14 +694,20 @@ def plot_multi_station_seasonal_center(
                 label += f" ({alt:.0f} m)"
 
             ax.plot(x, g[center_col].values, label=label)
+            stats = compute_basic_stats(g[center_col])
 
-        stats = compute_basic_stats(sub[center_col])
-        ax.text(
-            0.02, 0.98, format_stats_text(stats),
-            transform=ax.transAxes, va="top", ha="left",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8)
-        )
+            # stack stats boxes vertically, one per station
+            station_index = list(sorted(sub["station"].unique())).index(st)
+            y_pos = 0.98 - station_index * 0.18
 
+            ax.text(
+                0.02, y_pos,
+                f"{st}\nmean={stats['mean']:.2f}\nstd={stats['std']:.2f}",
+                transform=ax.transAxes,
+                va="top", ha="left",
+                bbox=dict(boxstyle="round", facecolor="white", alpha=0.7),
+                fontsize=8
+            )
         ax.set_title(season)
         ax.set_ylabel(f"{species} ({units})")
         ax.grid(True, alpha=0.3)
@@ -754,7 +899,142 @@ def plot_seasonal_boxplot(df, value_col, stations=None, mode=None, sector_type=N
     plt.show()
     return fig, ax
 
+def plot_monthly_boxplot_by_station(
+    df, value_col, stations, mode=None, sector_type=None,
+    title=None, ylabel=None, out_path=None,sp_lim=None,cv_lim=None, figsize=(14, 6)
+):
+    out = df.copy()
 
+    if isinstance(stations, str):
+        stations = [stations]
+    out = out[out["station"].isin(stations)]
+
+    if mode is not None and "mode" in out.columns:
+        out = out[out["mode"] == mode]
+
+    if sector_type is not None and "sector_typ" in out.columns:
+        out = out[out["sector_typ"] == sector_type]
+
+    out = add_time_features(out)
+    out = out.dropna(subset=[value_col])
+
+    months = list(range(1, 13))
+    n_st = len(stations)
+    width = 0.8 / max(n_st, 1)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for i, st in enumerate(stations):
+        data = []
+        positions = []
+        st_df = out[out["station"] == st]
+
+        for m in months:
+            vals = st_df.loc[st_df["month"] == m, value_col].dropna().values
+            if value_col == "cv_w":
+                vals = vals * 100.0
+            data.append(vals)
+            positions.append(m + (i - (n_st - 1) / 2) * width)
+
+        bp = ax.boxplot(
+            data,
+            positions=positions,
+            widths=width * 0.9,
+            patch_artist=True,
+            manage_ticks=False,showfliers=False
+        )
+        for patch in bp["boxes"]:
+            patch.set_alpha(0.5)
+
+    ax.set_xticks(months)
+    ax.set_xticklabels([calendar.month_abbr[m] for m in months])
+    ax.set_xlabel("Month")
+    if value_col == "cv_w":
+        ax.set_ylim(cv_lim)
+        ax.set_ylabel(ylabel or "CV (%)")
+    else:
+        ax.set_ylabel(ylabel or "O3 (ppb)")
+        ax.set_ylim(sp_lim)
+    ax.set_title(title or f"Monthly boxplot of {value_col} by station")
+    ax.grid(True, alpha=0.3)
+
+    # simple legend
+    handles = [plt.Line2D([0], [0], color=f"C{i}", lw=6, alpha=0.5) for i in range(n_st)]
+    ax.legend(handles, stations, title="Station", loc="best")
+
+    fig.tight_layout()
+    if out_path:
+        ensure_dir(out_path)
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.show()
+    return fig, ax
+
+def plot_seasonal_boxplot_by_station(
+    df, value_col, stations, mode=None, sector_type=None,
+    title=None, ylabel=None, out_path=None,cv_lim=None,sp_lim=None, figsize=(12, 6)
+):
+    out = df.copy()
+
+    if isinstance(stations, str):
+        stations = [stations]
+    out = out[out["station"].isin(stations)]
+
+    if mode is not None and "mode" in out.columns:
+        out = out[out["mode"] == mode]
+
+    if sector_type is not None and "sector_typ" in out.columns:
+        out = out[out["sector_typ"] == sector_type]
+
+    out = add_time_features(out)
+    out = out.dropna(subset=[value_col])
+
+    seasons = ["Winter", "Spring", "Summer", "Autumn"]
+    n_st = len(stations)
+    width = 0.8 / max(n_st, 1)
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for i, st in enumerate(stations):
+        data = []
+        positions = []
+        st_df = out[out["station"] == st]
+
+        for j, s in enumerate(seasons, start=1):
+            vals = st_df.loc[st_df["season"] == s, value_col].dropna().values
+            if value_col == "cv_w":
+                vals = vals * 100.0
+            data.append(vals)
+            positions.append(j + (i - (n_st - 1) / 2) * width)
+
+        bp = ax.boxplot(
+            data,
+            positions=positions,
+            widths=width * 0.9,
+            patch_artist=True,
+            manage_ticks=False,showfliers=False
+        )
+        for patch in bp["boxes"]:
+            patch.set_alpha(0.5)
+
+    ax.set_xticks(range(1, len(seasons) + 1))
+    ax.set_xticklabels(seasons)
+    ax.set_xlabel("Season")
+    if value_col == "cv_w":
+        ax.set_ylabel(ylabel or "CV (%)")
+    else:
+        ax.set_ylabel(ylabel or 'O3(ppb)')
+    ax.set_title(title or f"Seasonal boxplot of {value_col} by station")
+    ax.grid(True, alpha=0.3)
+
+    handles = [plt.Line2D([0], [0], color=f"C{i}", lw=6, alpha=0.5) for i in range(n_st)]
+    ax.legend(handles, stations, title="Station", loc="best")
+
+    fig.tight_layout()
+    if out_path:
+        ensure_dir(out_path)
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.show()
+    return fig, ax
 # ============================================================
 # 11. SCATTER: CENTER_PPB VS CV_W
 # ============================================================
@@ -1240,10 +1520,40 @@ def run_full_station_analysis(
         mode=mode,
         sector_type=sector_type,
         title=f"{station} seasonal boxplot of Coefficient of variation %",
-        ylabel='CV (%)',cv_lim=cv_lim,
+        ylabel='CV (%)',cv_lim=CV_LIM,
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_box_{cv_col}.png")
     )
-
+    plot_one_station_diurnal_cycle(
+    df=df_one,
+    station=station,
+    center_col="center_ppb",
+    mode=mode,
+    species=species,
+    units=units,
+    out_path=f"{out_dir_one}/{station}_{species}_diurnal_mean.png",
+    sp_lim=SP_LIM
+)
+    plot_one_station_diurnal_cycle_by_season(
+    df=df_one,
+    station=station,
+    center_col="center_ppb",
+    mode=mode,
+    species=species,
+    units=units,
+    out_path=f"{out_dir_one}/{station}_{species}_diurnal_by_season.png",
+    sp_lim=SP_LIM
+)
+    plot_one_station_diurnal_boxplot(
+    df=df_one,
+    station=station,
+    center_col="center_ppb",
+    mode=mode,
+    species=species,
+    units=units,
+    out_path=f"{out_dir_one}/{station}_{species}_diurnal_boxplot.png",
+    sp_lim=SP_LIM
+)
+    
     pairs, corr_all, _, _ = plot_center_vs_cv_scatter(
         df=df,
         stations=station,
@@ -1351,47 +1661,47 @@ def run_full_multi_station_analysis(
         out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_center.png")
     )
 
-    plot_monthly_boxplot(
-        df=df,
-        value_col=center_col,
-        stations=stations,
-        mode=mode,
-        title=f"Multi-station monthly boxplot of {center_col}",
-        ylabel=center_col,sp_lim=SP_LIM,
-        out_path=os.path.join(out_dir, f"multi_station_{species}_monthly_box_{center_col}.png")
-    )
+    plot_monthly_boxplot_by_station(
+    df=df,
+    value_col=center_col,
+    stations=stations,
+    mode=mode,
+    title=f"Multi-station monthly boxplot of 03(ppb)",
+    ylabel=center_col,sp_lim=SP_LIM,
+    out_path=os.path.join(out_dir, f"multi_station_{species}_monthly_box_{center_col}.png")
+)
 
-    plot_monthly_boxplot(
-        df=df,
-        value_col=cv_col,
-        stations=stations,
-        mode=mode,
-        sector_type=sector_type,
-        title=f"Multi-station monthly boxplot of {cv_col}",
-        ylabel=cv_col,cv_lim=CV_LIM,
-        out_path=os.path.join(out_dir, f"multi_station_{species}_monthly_box_{cv_col}.png")
-    )
+    plot_monthly_boxplot_by_station(
+    df=df,
+    value_col=cv_col,
+    stations=stations,
+    mode=mode,
+    sector_type=sector_type,
+    title=f"Multi-station monthly boxplot of CV",
+    ylabel="CV (%)",cv_lim=CV_LIM,
+    out_path=os.path.join(out_dir, f"multi_station_{species}_monthly_box_{cv_col}.png")
+)
 
-    plot_seasonal_boxplot(
-        df=df,
-        value_col=center_col,
-        stations=stations,
-        mode=mode,
-        title=f"Multi-station seasonal boxplot of {center_col}",
-        ylabel=center_col,sp_lim=SP_LIM,
-        out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{center_col}.png")
-    )
+    plot_seasonal_boxplot_by_station(
+    df=df,
+    value_col=center_col,
+    stations=stations,
+    mode=mode,
+    title=f"Multi-station seasonal boxplot of {center_col} by station",
+    ylabel='O3 (ppb)',sp_lim=SP_LIM,
+    out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{center_col}.png")
+)
 
-    plot_seasonal_boxplot(
-        df=df,
-        value_col=cv_col,
-        stations=stations,
-        mode=mode,
-        sector_type=sector_type,
-        title=f"Multi-station seasonal boxplot of {cv_col}",
-        ylabel=cv_col,cv_lim=CV_LIM,
-        out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{cv_col}.png")
-    )
+    plot_seasonal_boxplot_by_station(
+    df=df,
+    value_col=cv_col,
+    stations=stations,
+    mode=mode,
+    sector_type=sector_type,
+    title=f"Multi-station seasonal boxplot of {cv_col} by station",
+    ylabel="CV (%)",cv_lim=CV_LIM,sp_lim=SP_LIM,
+    out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{cv_col}.png")
+)
 
     pairs, corr_all, _, _ = plot_center_vs_cv_scatter(
         df=df,
@@ -1419,7 +1729,16 @@ def run_full_multi_station_analysis(
         aggregate_cv_over_sectors=aggregate_cv_over_sectors,cv_lim=CV_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_scatter_{center_col}_vs_{cv_col}_by_month.png")
     )
-
+    plot_multi_station_diurnal_cycle(
+    df=df_all,
+    stations=stations,
+    center_col="center_ppb",
+    mode=mode,
+    species=species,
+    units=units,
+    out_path=f"{out_dir_multi}/multi_station_{species}_diurnal_mean.png",
+    sp_lim=SP_LIM
+     )
     monthly_stats = monthly_stats_table(
         df[df["station"].isin(stations)],
         value_cols=[center_col, cv_col]
