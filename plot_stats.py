@@ -12,12 +12,12 @@ from matplotlib.colors import to_hex
 # ============================================================
 # USER INPUTS
 # ============================================================
-RUN_MODE = "multi"          # "one", "multi", "both"
+RUN_MODE = "one"          # "one", "multi", "both"
 species = "O3"
 mode = "A"
 units = "ppb"
 
-station = "1006A"
+station = "2629A"
 stations = ["1006A","2629A"]
 
 SECTOR_TYPE = "CUM"
@@ -34,6 +34,7 @@ STATIONS_PATH = "/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt"
 out_dir_one = f"{PLOTS_DIR}/full_analysis_one_station"
 out_dir_multi = f"{PLOTS_DIR}/full_analysis_multi_station"
 showfliers=False
+UTC_OFFSET_LOCAL = 8
 #%%
 # 1. STATIONS LOADER
 # ============================================================
@@ -66,8 +67,24 @@ def load_stations_file(stations_path: str) -> pd.DataFrame:
     df["is_valid"] = df[["Latitude", "Longitude", "Altitude"]].notna().all(axis=1)
 
     return df[expected + ["is_valid"]]
+#---------------------------------
+#LOCAL TIME UTC HELPER
+#-----------------------------
+def add_local_time_top_axis(ax, utc_offset=8):
+    """
+    Add a second x-axis showing local time from UTC hour ticks.
+    Assumes the main x-axis is hour of day in UTC (0..23).
+    """
+    secax = ax.secondary_xaxis("top")
 
+    ticks = np.arange(24)
+    labels = [str((h + utc_offset) % 24) for h in ticks]
 
+    secax.set_xticks(ticks)
+    secax.set_xticklabels(labels)
+    secax.set_xlabel(f"Local Time (UTC+{utc_offset})")
+
+    return secax
 # ============================================================
 # 2. DATA LOADER
 # ============================================================
@@ -490,7 +507,8 @@ def plot_one_station_diurnal_cycle(
     fig, ax = plt.subplots(figsize=figsize)
     ax.plot(grp["hour"], grp["mean"], marker="o")
     ax.set_xticks(range(24))
-    ax.set_xlabel("Hour of day")
+    ax.set_xlabel("UTC Hour")
+    add_local_time_top_axis(ax, utc_offset=8)
     ax.set_ylabel(f"{species} ({units})")
     ax.set_title(f"Diurnal cycle of {center_col} - {station}")
     ax.grid(True, alpha=0.3)
@@ -522,7 +540,8 @@ def plot_one_station_diurnal_cycle_by_season(
         ax.plot(grp["hour"], grp[center_col], marker="o")
         ax.set_title(season)
         ax.set_xticks(range(24))
-        ax.set_xlabel("Hour")
+        ax.set_xlabel("UTC Hour")
+        add_local_time_top_axis(ax, utc_offset=UTC_OFFSET_LOCAL)
         ax.set_ylabel(f"{species} ({units})")
         ax.grid(True, alpha=0.3)
 
@@ -551,9 +570,10 @@ def plot_multi_station_diurnal_cycle(
         ax.plot(grp["hour"], grp[center_col], marker="o", label=st)
 
     ax.set_xticks(range(24))
-    ax.set_xlabel("Hour of day")
-    ax.set_ylabel(f"{species} ({units})")
-    ax.set_title(f"Diurnal cycle of {center_col} - multiple stations")
+    ax.set_xlabel("UTC Hour")
+    add_local_time_top_axis(ax, utc_offset=UTC_OFFSET_LOCAL)
+    ax.set_ylabel(f"O3 ({units})")
+    ax.set_title(f"Diurnal cycle of O3 - multiple stations")
     ax.grid(True, alpha=0.3)
     ax.legend()
 
@@ -577,9 +597,12 @@ def plot_one_station_diurnal_boxplot(
 
     fig, ax = plt.subplots(figsize=figsize)
     ax.boxplot(data, tick_labels=list(range(24)))
+    ax.set_xticks(range(24))
+    ax.set_xlabel("UTC Hour")
+    add_local_time_top_axis(ax, utc_offset=UTC_OFFSET_LOCAL)
     ax.set_xlabel("Hour of day")
     ax.set_ylabel(f"{species} ({units})")
-    ax.set_title(f"Diurnal distribution of {center_col} - {station}")
+    ax.set_title(f"Diurnal distribution of O3 - {station}")
     ax.grid(True, alpha=0.3)
 
     if sp_lim is not None:
@@ -935,7 +958,7 @@ def plot_monthly_boxplot_by_station(
                 vals = vals * 100.0
             data.append(vals)
             positions.append(m + (i - (n_st - 1) / 2) * width)
-
+        color = f"C{i}"
         bp = ax.boxplot(
             data,
             positions=positions,
@@ -944,18 +967,22 @@ def plot_monthly_boxplot_by_station(
             manage_ticks=False,showfliers=False
         )
         for patch in bp["boxes"]:
-            patch.set_alpha(0.5)
+            patch.set_facecolor(color)
+            patch.set_edgecolor(color)
+            patch.set_alpha(0.4)
 
+            
     ax.set_xticks(months)
     ax.set_xticklabels([calendar.month_abbr[m] for m in months])
     ax.set_xlabel("Month")
     if value_col == "cv_w":
         ax.set_ylim(cv_lim)
         ax.set_ylabel(ylabel or "CV (%)")
+        ax.set_title("Monthly boxplot of CV by station")
     else:
         ax.set_ylabel(ylabel or "O3 (ppb)")
         ax.set_ylim(sp_lim)
-    ax.set_title(title or f"Monthly boxplot of {value_col} by station")
+        ax.set_title("Monthly boxplot of O3 by station")
     ax.grid(True, alpha=0.3)
 
     # simple legend
@@ -1005,7 +1032,7 @@ def plot_seasonal_boxplot_by_station(
                 vals = vals * 100.0
             data.append(vals)
             positions.append(j + (i - (n_st - 1) / 2) * width)
-
+        color=f"C{i}"
         bp = ax.boxplot(
             data,
             positions=positions,
@@ -1014,15 +1041,30 @@ def plot_seasonal_boxplot_by_station(
             manage_ticks=False,showfliers=False
         )
         for patch in bp["boxes"]:
-            patch.set_alpha(0.5)
-
+            patch.set_facecolor(color)
+            patch.set_edgecolor(color)
+            patch.set_alpha(0.4)
+        
+        bp = ax.boxplot(
+            data,
+            positions=positions,
+            widths=width * 0.9,
+            patch_artist=True,
+            manage_ticks=False,showfliers=False
+        )
+        for patch in bp["boxes"]:
+            patch.set_facecolor(color)
+            patch.set_edgecolor(color)
+            patch.set_alpha(0.4)
     ax.set_xticks(range(1, len(seasons) + 1))
     ax.set_xticklabels(seasons)
     ax.set_xlabel("Season")
     if value_col == "cv_w":
         ax.set_ylabel(ylabel or "CV (%)")
+        ax.set_ylim(cv_lim)
     else:
         ax.set_ylabel(ylabel or 'O3(ppb)')
+        ax.set_ylim(sp_lim)
     ax.set_title(title or f"Seasonal boxplot of {value_col} by station")
     ax.grid(True, alpha=0.3)
 
@@ -1687,7 +1729,7 @@ def run_full_multi_station_analysis(
     value_col=center_col,
     stations=stations,
     mode=mode,
-    title=f"Multi-station seasonal boxplot of {center_col} by station",
+    title=f"Multi-station seasonal boxplot of O3 (ppb) by station",
     ylabel='O3 (ppb)',sp_lim=SP_LIM,
     out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{center_col}.png")
 )
@@ -1698,7 +1740,7 @@ def run_full_multi_station_analysis(
     stations=stations,
     mode=mode,
     sector_type=sector_type,
-    title=f"Multi-station seasonal boxplot of {cv_col} by station",
+    title=f"Multi-station seasonal boxplot of CV (%) by station",
     ylabel="CV (%)",cv_lim=CV_LIM,sp_lim=SP_LIM,
     out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{cv_col}.png")
 )
