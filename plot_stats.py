@@ -24,7 +24,8 @@ SECTOR_TYPE = "CUM"
 CENTER_COL = "center_ppb"
 CV_COL = "cv_w"
 SECTOR_COL = "sector"
-AGGREGATE_CV_OVER_SECTORS = True
+AGGREGATE_CV_OVER_SECTORS = False
+CV_SECTOR="C1"
 MERGE_SEASONAL_YEARS = True
 SP_LIM=(20,100)
 CV_LIM=(0,10)
@@ -319,14 +320,17 @@ def prepare_cv_by_sector(df: pd.DataFrame, station: str, cv_col="cv_w", sector_c
 
 
 def prepare_center_cv_pairs(
-    df: pd.DataFrame,
+    df,
     stations=None,
     center_col="center_ppb",
     cv_col="cv_w",
+    sector_col="sector",
     mode=None,
     sector_type=None,
+    cv_sector=None,            # NEW
     aggregate_cv_over_sectors=True
-) -> pd.DataFrame:
+):
+
     out = df.copy()
 
     if stations is not None:
@@ -342,8 +346,10 @@ def prepare_center_cv_pairs(
 
     out = out.dropna(subset=["timestamp", center_col, cv_col]).copy()
 
-    if aggregate_cv_over_sectors:
-        # one row per station/timestamp
+    # OPTION 1: specific sector
+    if cv_sector is not None:
+        out = out[out[sector_col] == cv_sector]
+
         out = (
             out.groupby(["station", "timestamp"], as_index=False)
             .agg(
@@ -351,14 +357,65 @@ def prepare_center_cv_pairs(
                 cv_w=(cv_col, "mean")
             )
         )
+
+    # OPTION 2: aggregate sectors
+    elif aggregate_cv_over_sectors:
+
+        out = (
+            out.groupby(["station", "timestamp"], as_index=False)
+            .agg(
+                center_ppb=(center_col, "mean"),
+                cv_w=(cv_col, "mean")
+            )
+        )
+
+    # OPTION 3: keep all sectors
     else:
-        # keep one row per sector; center_ppb repeats across sectors
         out = out.rename(columns={center_col: "center_ppb", cv_col: "cv_w"})
 
     out = add_time_features(out)
+
     return out
 
+def prepare_cv_for_boxplots(
+    df,
+    stations=None,
+    cv_col="cv_w",
+    sector_col="sector",
+    mode=None,
+    sector_type=None,
+    aggregate_cv_over_sectors=True,
+    cv_sector=None
+):
+    out = df.copy()
 
+    if stations is not None:
+        if isinstance(stations, str):
+            stations = [stations]
+        out = out[out["station"].isin(stations)]
+
+    if mode is not None and "mode" in out.columns:
+        out = out[out["mode"] == mode]
+
+    if sector_type is not None and "sector_typ" in out.columns:
+        out = out[out["sector_typ"] == sector_type]
+
+    out = out.dropna(subset=["timestamp", cv_col]).copy()
+
+    # one selected sector
+    if cv_sector is not None:
+        out = out[out[sector_col] == cv_sector].copy()
+
+    # aggregate over sectors
+    elif aggregate_cv_over_sectors:
+        out = (
+            out.groupby(["station", "timestamp"], as_index=False)
+            .agg(cv_w=(cv_col, "mean"))
+        )
+        cv_col = "cv_w"
+
+    out = add_time_features(out)
+    return out, cv_col
 # ============================================================
 # 7. STATISTICS TABLES
 # ============================================================
@@ -842,7 +899,9 @@ def plot_one_station_seasonal_cv_by_sector(
 # ============================================================
 # 10. BOXPLOTS: MONTH / SEASON
 # ============================================================
-def plot_monthly_boxplot(df, value_col, stations=None, mode=None, sector_type=None, title=None, ylabel=None,sp_lim=None,cv_lim=None, out_path=None, figsize=(12, 6)):
+def plot_monthly_boxplot(df, value_col, stations=None, mode=None, sector_type=None, title=None, 
+                         ylabel=None,sp_lim=None,cv_lim=None, out_path=None,
+                         aggregate_cv_over_sectors=True, cv_sector=None, sector_col="sector", figsize=(12, 6)):
     out = df.copy()
 
     if stations is not None:
@@ -856,14 +915,26 @@ def plot_monthly_boxplot(df, value_col, stations=None, mode=None, sector_type=No
     if sector_type is not None and "sector_typ" in out.columns:
         out = out[out["sector_typ"] == sector_type]
 
-    out = add_time_features(out)
-    out = out.dropna(subset=[value_col])
+    if value_col == "cv_w":
+            out, value_col = prepare_cv_for_boxplots(
+            out,
+            stations=None,
+            cv_col=value_col,
+            sector_col=sector_col,
+            mode=None,
+            sector_type=sector_type,
+            aggregate_cv_over_sectors=aggregate_cv_over_sectors,
+            cv_sector=cv_sector
+        )
+    else:
+        out = add_time_features(out)
+        out = out.dropna(subset=[value_col])
 
     months = list(range(1, 13))
     if value_col == "cv_w":
         data = [out.loc[out["month"] == m, value_col].dropna().values * 100.0 for m in months]
     else:
-        data = [out.loc[out["month"] == m, value_col].dropna().values for m in months]
+        data = [out.loc[out["month"] == m, value_col].dropna().values for m in months]   
     fig, ax = plt.subplots(figsize=figsize)
     ax.boxplot(data, tick_labels=[calendar.month_abbr[m] for m in months],showfliers=False)
     ax.set_xlabel("Month")
@@ -882,7 +953,9 @@ def plot_monthly_boxplot(df, value_col, stations=None, mode=None, sector_type=No
     return fig, ax
 
 
-def plot_seasonal_boxplot(df, value_col, stations=None, mode=None, sector_type=None, title=None, ylabel=None,sp_lim=None,cv_lim=None, out_path=None, figsize=(10, 6)):
+def plot_seasonal_boxplot(df, value_col, stations=None, mode=None, sector_type=None, title=None,
+                           ylabel=None,sp_lim=None,cv_lim=None,aggregate_cv_over_sectors=True, 
+                           cv_sector=None, sector_col="sector", out_path=None, figsize=(10, 6)):
     out = df.copy()
 
     if stations is not None:
@@ -896,8 +969,20 @@ def plot_seasonal_boxplot(df, value_col, stations=None, mode=None, sector_type=N
     if sector_type is not None and "sector_typ" in out.columns:
         out = out[out["sector_typ"] == sector_type]
 
-    out = add_time_features(out)
-    out = out.dropna(subset=[value_col])
+    if value_col == "cv_w":
+        out, value_col = prepare_cv_for_boxplots(
+            out,
+            stations=None,
+            cv_col=value_col,
+            sector_col=sector_col,
+            mode=None,
+            sector_type=sector_type,
+            aggregate_cv_over_sectors=aggregate_cv_over_sectors,
+            cv_sector=cv_sector
+        )
+    else:
+        out = add_time_features(out)
+        out = out.dropna(subset=[value_col])
 
     seasons = ["Winter", "Spring", "Summer", "Autumn"]
     if value_col == "cv_w":
@@ -924,7 +1009,8 @@ def plot_seasonal_boxplot(df, value_col, stations=None, mode=None, sector_type=N
 
 def plot_monthly_boxplot_by_station(
     df, value_col, stations, mode=None, sector_type=None,
-    title=None, ylabel=None, out_path=None,sp_lim=None,cv_lim=None, figsize=(14, 6)
+    title=None, ylabel=None, out_path=None,sp_lim=None,cv_lim=None,
+    aggregate_cv_over_sectors=True, cv_sector=None, sector_col="sector", figsize=(14, 6)
 ):
     out = df.copy()
 
@@ -938,8 +1024,20 @@ def plot_monthly_boxplot_by_station(
     if sector_type is not None and "sector_typ" in out.columns:
         out = out[out["sector_typ"] == sector_type]
 
-    out = add_time_features(out)
-    out = out.dropna(subset=[value_col])
+    if value_col == "cv_w":
+        out, value_col = prepare_cv_for_boxplots(
+            out,
+            stations=stations,
+            cv_col=value_col,
+            sector_col=sector_col,
+            mode=mode,
+            sector_type=sector_type,
+            aggregate_cv_over_sectors=aggregate_cv_over_sectors,
+            cv_sector=cv_sector
+        )
+    else:
+        out = add_time_features(out)
+        out = out.dropna(subset=[value_col])
 
     months = list(range(1, 13))
     n_st = len(stations)
@@ -998,7 +1096,8 @@ def plot_monthly_boxplot_by_station(
 
 def plot_seasonal_boxplot_by_station(
     df, value_col, stations, mode=None, sector_type=None,
-    title=None, ylabel=None, out_path=None,cv_lim=None,sp_lim=None, figsize=(12, 6)
+    title=None, ylabel=None, out_path=None,cv_lim=None,sp_lim=None,
+     aggregate_cv_over_sectors=True, cv_sector=None, sector_col="sector", figsize=(12, 6)
 ):
     out = df.copy()
 
@@ -1012,8 +1111,20 @@ def plot_seasonal_boxplot_by_station(
     if sector_type is not None and "sector_typ" in out.columns:
         out = out[out["sector_typ"] == sector_type]
 
-    out = add_time_features(out)
-    out = out.dropna(subset=[value_col])
+    if value_col == "cv_w":
+        out, value_col = prepare_cv_for_boxplots(
+            out,
+            stations=stations,
+            cv_col=value_col,
+            sector_col=sector_col,
+            mode=mode,
+            sector_type=sector_type,
+            aggregate_cv_over_sectors=aggregate_cv_over_sectors,
+            cv_sector=cv_sector
+        )
+    else:
+        out = add_time_features(out)
+        out = out.dropna(subset=[value_col])
 
     seasons = ["Winter", "Spring", "Summer", "Autumn"]
     n_st = len(stations)
@@ -1458,6 +1569,54 @@ def plot_one_station_ratio_meanw_to_center(
 
     plt.show()
     return fig, ax
+def plot_one_station_seasonal_boxplot_ratio_meanw_to_center(
+    df,
+    station,
+    center_col="center_ppb",
+    mean_col="mean_w",
+    sector_col="sector",
+    sector_type="CUM",
+    mode=None,
+    species="O3",
+    out_path=None,
+    figsize=(12, 6),
+    ratio_lim=None
+):
+    out = df.copy()
+    out = out[out["station"] == station]
+
+    if mode is not None and "mode" in out.columns:
+        out = out[out["mode"] == mode]
+
+    if sector_type is not None and "sector_typ" in out.columns:
+        out = out[out["sector_typ"] == sector_type]
+
+    out = out.dropna(subset=["timestamp", center_col, mean_col, sector_col]).copy()
+    out = out[pd.to_numeric(out[center_col], errors="coerce") != 0].copy()
+
+    out["ratio_meanw_to_center"] = out[mean_col] / out[center_col]
+    out = add_time_features(out)
+
+    seasons = ["Winter", "Spring", "Summer", "Autumn"]
+    data = [out.loc[out["season"] == s, "ratio_meanw_to_center"].dropna().values for s in seasons]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.boxplot(data, tick_labels=seasons)
+    ax.set_xlabel("Season")
+    ax.set_ylim(0.99,1.01)
+    ax.set_ylabel("mean_w / center_ppb")
+    ax.set_title(f"{species} seasonal boxplot of mean / center value - {station}")
+    ax.grid(True, alpha=0.3)
+
+    if ratio_lim is not None:
+        ax.set_ylim(ratio_lim)
+
+    fig.tight_layout()
+    if out_path:
+        ensure_dir(out_path)
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.show()
+    return fig, ax
 # ============================================================
 # 13. WRAPPERS: RUN EVERYTHING AUTOMATICALLY
 # ============================================================
@@ -1474,7 +1633,7 @@ def run_full_station_analysis(
     cv_col="cv_w",
     sector_col="sector",
     aggregate_cv_over_sectors=True,merge_years=False,sp_lim=None,
-    cv_lim=None,ratio_lim=None
+    cv_lim=None,ratio_lim=None,cv_sector=None
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1501,6 +1660,18 @@ def run_full_station_analysis(
         out_path=f"{out_dir_one}/{station}_{species}_ratio_center_to_meanw_by_sector.png",
         merge_years=False
 )
+    plot_one_station_seasonal_boxplot_ratio_meanw_to_center(
+        df=df,
+        station=station,
+        center_col=center_col,
+        mean_col="mean_w",
+        sector_col=sector_col,
+        sector_type=sector_type,
+        mode=mode,
+        species=species,
+        out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_boxplot_ratio_meanw_to_center.png"),
+        ratio_lim=None
+    )
     plot_one_station_seasonal_center(
         df=df,
         station=station,
@@ -1540,8 +1711,10 @@ def run_full_station_analysis(
         stations=station,
         mode=mode,
         sector_type=sector_type,
-        title=f"{station} monthly boxplot of coefficient of variation (%)",
-        ylabel='CV(%)',cv_lim=CV_LIM,
+        title=f"{station} monthly boxplot of coefficient of variation (%) {cv_sector}",
+        ylabel='CV(%)',cv_lim=CV_LIM,aggregate_cv_over_sectors=aggregate_cv_over_sectors,
+        cv_sector=cv_sector,
+        sector_col=sector_col,
         out_path=os.path.join(out_dir, f"{station}_{species}_monthly_box_{cv_col}.png")
     )
 
@@ -1561,8 +1734,10 @@ def run_full_station_analysis(
         stations=station,
         mode=mode,
         sector_type=sector_type,
-        title=f"{station} seasonal boxplot of Coefficient of variation %",
-        ylabel='CV (%)',cv_lim=CV_LIM,
+        title=f"{station} seasonal boxplot of Coefficient of variation {cv_sector} %",
+        ylabel='CV (%)',cv_lim=CV_LIM,aggregate_cv_over_sectors=aggregate_cv_over_sectors,
+        cv_sector=cv_sector,
+        sector_col=sector_col,
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_box_{cv_col}.png")
     )
     plot_one_station_diurnal_cycle(
@@ -1677,7 +1852,8 @@ def run_full_multi_station_analysis(
     out_dir=".",
     center_col="center_ppb",
     cv_col="cv_w",
-    aggregate_cv_over_sectors=True,merge_years=False,sp_lim=None,cv_lim=None
+    aggregate_cv_over_sectors=True,merge_years=False,
+    sp_lim=None,cv_lim=None,cv_sector=None,sector_col="sector"
 ):
     os.makedirs(out_dir, exist_ok=True)
 
@@ -1720,7 +1896,8 @@ def run_full_multi_station_analysis(
     mode=mode,
     sector_type=sector_type,
     title=f"Multi-station monthly boxplot of CV",
-    ylabel="CV (%)",cv_lim=CV_LIM,
+    ylabel="CV (%)",cv_lim=CV_LIM,aggregate_cv_over_sectors=aggregate_cv_over_sectors,
+    cv_sector=cv_sector,sector_col=sector_col,
     out_path=os.path.join(out_dir, f"multi_station_{species}_monthly_box_{cv_col}.png")
 )
 
@@ -1741,7 +1918,8 @@ def run_full_multi_station_analysis(
     mode=mode,
     sector_type=sector_type,
     title=f"Multi-station seasonal boxplot of CV (%) by station",
-    ylabel="CV (%)",cv_lim=CV_LIM,sp_lim=SP_LIM,
+    ylabel="CV (%)",cv_lim=CV_LIM,sp_lim=SP_LIM,aggregate_cv_over_sectors=aggregate_cv_over_sectors,
+        cv_sector=cv_sector,sector_col=sector_col,
     out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{cv_col}.png")
 )
 
@@ -1868,7 +2046,7 @@ if __name__ == "__main__":
             cv_col=CV_COL,
             sector_col=SECTOR_COL,ratio_lim=RATIO_LIM,
             aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS,
-                        merge_years=MERGE_SEASONAL_YEARS,sp_lim=SP_LIM,cv_lim=CV_LIM
+             merge_years=MERGE_SEASONAL_YEARS,sp_lim=SP_LIM,cv_lim=CV_LIM, cv_sector=CV_SECTOR
         )
 
     if RUN_MODE in ["multi", "both"]:
@@ -1891,7 +2069,7 @@ if __name__ == "__main__":
             out_dir=out_dir_multi,
             center_col=CENTER_COL,
             cv_col=CV_COL,
-            aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS,
-                        merge_years=MERGE_SEASONAL_YEARS,sp_lim=SP_LIM,cv_lim=CV_LIM)
+            aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS,sector_col=SECTOR_COL,
+            merge_years=MERGE_SEASONAL_YEARS,sp_lim=SP_LIM,cv_lim=CV_LIM)
         
 # %%
