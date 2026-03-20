@@ -36,6 +36,7 @@ out_dir_one = f"{PLOTS_DIR}/full_analysis_one_station"
 out_dir_multi = f"{PLOTS_DIR}/full_analysis_multi_station"
 showfliers=False
 UTC_OFFSET_LOCAL = 8
+LINE_ALPHA=0.8
 #%%
 # 1. STATIONS LOADER
 # ============================================================
@@ -256,7 +257,7 @@ def get_sector_order(sectors):
 def make_red_pink_gradient(n=10):
     colors = []
     red_vals = np.linspace(0.85, 1.0, n)
-    gb_vals = np.linspace(0.25, 0.85, n)
+    gb_vals = np.linspace(0.85, 0.25, n)
     for r, gb in zip(red_vals, gb_vals):
         colors.append((r, gb, gb))
     return [to_hex(c) for c in colors]
@@ -1478,7 +1479,7 @@ def plot_altitude_relations(
 
 
 # ============================================================
-# 12b. FULL-PERIOD TIMESERIES OF center_ppb
+# 12b. FULL-PERIOD TIMESERIES OF center_ppb,and CV
 # ============================================================
 def plot_center_timeseries_full_period(
     df,
@@ -1534,7 +1535,80 @@ def plot_center_timeseries_full_period(
 
     plt.show()
     return fig, ax
+def plot_one_station_cv_timeseries_full_period(
+    df,
+    station,
+    stations_df=None,
+    cv_col="cv_w",
+    sector_col="sector",
+    sector_type="CUM",
+    mode=None,
+    species="O3",
+    out_path=None,
+    figsize=(14, 6),
+    cv_lim=None
+):
+    out = df.copy()
+    out = out[out["station"] == station]
 
+    if mode is not None and "mode" in out.columns:
+        out = out[out["mode"] == mode]
+
+    if sector_type is not None and "sector_typ" in out.columns:
+        out = out[out["sector_typ"] == sector_type]
+
+    out = out.dropna(subset=["timestamp", cv_col, sector_col]).copy()
+    out = out.sort_values("timestamp")
+
+    altitude = np.nan
+    if stations_df is not None:
+        row = stations_df.loc[stations_df["Station_Name"] == station]
+        if not row.empty:
+            altitude = row["Altitude"].iloc[0]
+
+    all_sectors = get_sector_order(out[sector_col].dropna().unique())
+    colors = make_red_pink_gradient(len(all_sectors))
+    color_map = dict(zip(all_sectors, colors))
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    for sec in all_sectors:
+        ss = out[out[sector_col] == sec].sort_values("timestamp").copy()
+        if ss.empty:
+            continue
+
+        ax.plot(
+            ss["timestamp"],
+            ss[cv_col].values * 100.0,
+            label=str(sec),
+            color=color_map[sec],
+            alpha=LINE_ALPHA
+        )
+
+    title = f"{species} full-period Coefficient of variation (%) by sector | {station}"
+    if pd.notna(altitude):
+        title += f" ({altitude:.0f} m)"
+    if sector_type is not None:
+        title += f" | sector_type={sector_type}"
+
+    ax.set_title(title)
+    ax.set_xlabel("Time")
+    ax.set_ylabel(f"{cv_col} (%)")
+    ax.grid(True, alpha=0.3)
+    ax.legend(title="Sector", fontsize=8, ncol=2)
+    ax.tick_params(axis="x", rotation=45)
+
+    if cv_lim is not None:
+        ax.set_ylim(cv_lim)
+
+    fig.tight_layout()
+
+    if out_path:
+        ensure_dir(out_path)
+        fig.savefig(out_path, dpi=200, bbox_inches="tight")
+
+    plt.show()
+    return fig, ax
 #12c.RATIO PLOTTING
 def plot_one_station_ratio_meanw_to_center(
     df,
@@ -1721,6 +1795,18 @@ def run_full_station_analysis(
         species=species,
         out_path=f"{out_dir_one}/{station}_{species}_ratio_center_to_meanw_by_sector.png",
         merge_years=False
+)
+    plot_one_station_cv_timeseries_full_period(
+    df=df_one,
+    station=station,
+    stations_df=stations_df,
+    cv_col="cv_w",
+    sector_col="sector",
+    sector_type="CUM",
+    mode=mode,
+    species=species,
+    out_path=f"{out_dir_one}/{station}_{species}_full_period_cvw_by_sector.png",
+    cv_lim=CV_LIM
 )
     plot_one_station_seasonal_boxplot_ratio_meanw_to_center(
         df=df,
