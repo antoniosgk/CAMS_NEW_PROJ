@@ -59,7 +59,7 @@ RUN_PERIOD = True
 
 # Period settings (only used when RUN_PERIOD=True)
 START_DT = datetime.datetime(2005, 5, 16, 0, 0)  #yyyy,m,d,hr,min
-END_DT   = datetime.datetime(2007, 6, 15, 0, 00)
+END_DT   = datetime.datetime(2005, 5, 16, 6, 00)
 print("START_DT:", START_DT)
 print("END_DT:", END_DT)
 print("Generated timestamps:", list(iter_timestamps(START_DT, END_DT, 30)))
@@ -469,7 +469,7 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
     for d0, t0 in iter_timestamps(start_dt, end_dt, step_minutes):
         sp0, _, _, _, _ = build_paths(base_path, product, species, d0, t0)
         try:
-            ds0 = xr.open_dataset(sp0)
+            ds0 = xr.open_dataset(sp0,decode_times=False)
             lats = ds0["lat"].values
             lons = ds0["lon"].values
             ds0.close()
@@ -483,6 +483,7 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
 
     if not found:
         raise FileNotFoundError("No species files found in the requested period.")
+    """
     ts = list(iter_timestamps(START_DT, END_DT, 30))
     print("Generated timestamps:", ts)
     
@@ -495,14 +496,14 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
         print("  PL  exists:", os.path.exists(PLf),  PLf)
         print("  RH  exists:", os.path.exists(RHf),  RHf)
         print("  orog exists:", os.path.exists(orogf),orogf)
-        
+    """   
     df_30min, df_summary = run_period_cumulative_sector_timeseries(
         base_path=base_path,
         product=product,
         species=species,
         station=station,
-        start_dt=START_DT,
-        end_dt=END_DT,
+        start_dt=start_dt,
+        end_dt=end_dt,
         cell_nums=cell_nums,
         radii_km=dist_bins_km,
         mode=mode,

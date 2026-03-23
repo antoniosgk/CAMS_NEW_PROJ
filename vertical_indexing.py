@@ -7,7 +7,157 @@ import warnings
 
 from metpy.units import units as mp_units
 
+import numpy as np
 
+# constants (float)
+RD = 287.05       # J/(kg*K)
+G0 = 9.80665      # m/s^2
+EPS = 0.622       # Rd/Rv approx
+
+def _rh_to_virtual_temperature_numpy(p_pa, T_k, RH):
+    """
+    Vectorized virtual temperature using RH.
+    p_pa, T_k, RH are numpy arrays of same shape.
+    RH can be 0-1 or 0-100.
+    Returns Tv [K] float array.
+    """
+    p = np.asarray(p_pa, dtype=float)
+    T = np.asarray(T_k, dtype=float)
+    rh = np.asarray(RH, dtype=float)
+
+    # sanitize
+    T = np.where(np.isfinite(T), T, np.nan)
+    p = np.where(np.isfinite(p) & (p > 0), p, np.nan)
+
+    # RH scaling (0-100 -> 0-1)
+    rh_max = np.nanmax(rh)
+    rhf = rh / 100.0 if (np.isfinite(rh_max) and rh_max > 1.5) else rh
+    rhf = np.clip(rhf, 0.0, 1.0)
+
+    # saturation vapor pressure over water (Bolton-style), in Pa
+    Tc = T - 273.15
+    es_hPa = 6.112 * np.exp((17.67 * Tc) / (Tc + 243.5))
+    es = es_hPa * 100.0
+
+    # actual vapor pressure
+    e = rhf * es
+
+    # avoid e >= p
+    e = np.minimum(e, 0.99 * p)
+
+    # mixing ratio r = eps * e/(p-e) [kg/kg]
+    r = EPS * e / (p - e)
+
+    # specific humidity q
+    q = r / (1.0 + r)
+
+    # virtual temperature (approx)
+    Tv = T * (1.0 + 0.61 * q)
+    return Tv
+
+
+def compute_heights_fast(p_prof_Pa, T_prof_K, RH=None, z0=0.0):
+    """
+    Fast hypsometric height integration (NumPy only).
+
+    Supports:
+      - 1D: (nlev,)
+      - 2D: (nlev,ncol)
+
+    Assumes lev order is consistent within a column. Uses:
+      dz[k] = (RD/G0) * Tv_layer[k] * ln(p[k+1]/p[k])   (k=0..nlev-2)
+    Anchors height at the max-pressure index (k_surf) to z0.
+
+    Fast path: if k_surf is constant and equals the last level, uses pure cumsum (no Python loops).
+    """
+    p = np.asarray(p_prof_Pa, dtype=float)
+    T = np.asarray(T_prof_K, dtype=float)
+    if p.shape != T.shape:
+        raise ValueError("p and T must have same shape")
+
+    # floor pressure
+    p_floor = 1e-6
+    p = np.where(np.isfinite(p) & (p > 0), np.maximum(p, p_floor), np.nan)
+    T = np.where(np.isfinite(T), T, np.nan)
+
+    # virtual temperature
+    if RH is None:
+        Tv = T
+    else:
+        Tv = _rh_to_virtual_temperature_numpy(p, T, RH)
+
+    if p.ndim == 1:
+        nlev = p.shape[0]
+        k_surf = int(np.nanargmax(p))
+
+        # layer thicknesses dz for k=0..nlev-2
+        Tv_layer = 0.5 * (Tv[1:] + Tv[:-1])
+        log_ratio = np.log(p[1:] / p[:-1])
+        dz = (RD / G0) * Tv_layer * log_ratio  # (nlev-1,)
+
+        z = np.full(nlev, np.nan, dtype=float)
+        z[k_surf] = float(z0)
+
+        # if surface is last level -> fast vectorized upward integration
+        if k_surf == nlev - 1:
+            # z[k] = z0 + sum_{m=k}^{nlev-2} dz[m]
+            z_up = float(z0) + np.cumsum(dz[::-1])[::-1]  # (nlev-1,)
+            z[:-1] = z_up
+            return z
+
+        # otherwise fallback (still O(nlev) but cheap)
+        for k in range(k_surf - 1, -1, -1):
+            z[k] = z[k + 1] + dz[k]
+        for k in range(k_surf + 1, nlev):
+            z[k] = z[k - 1] - dz[k - 1]
+        return z
+
+    if p.ndim == 2:
+        nlev, ncol = p.shape
+        k_surf = np.nanargmax(p, axis=0)  # (ncol,)
+
+        z0_arr = np.asarray(z0, dtype=float)
+        if z0_arr.ndim == 0:
+            z0_col = np.full(ncol, float(z0_arr), dtype=float)
+        elif z0_arr.shape == (ncol,):
+            z0_col = z0_arr.astype(float)
+        else:
+            raise ValueError("For 2D, z0 must be scalar or shape (ncol,)")
+
+        Tv_layer = 0.5 * (Tv[1:, :] + Tv[:-1, :])          # (nlev-1,ncol)
+        log_ratio = np.log(p[1:, :] / p[:-1, :])           # (nlev-1,ncol)
+        dz = (RD / G0) * Tv_layer * log_ratio              # (nlev-1,ncol)
+
+        z = np.full((nlev, ncol), np.nan, dtype=float)
+
+        # FAST PATH: all columns have same surface index AND it's last level
+        if np.all(k_surf == (nlev - 1)):
+            z[-1, :] = z0_col
+            z_up = z0_col[None, :] + np.cumsum(dz[::-1, :], axis=0)[::-1, :]  # (nlev-1,ncol)
+            z[:-1, :] = z_up
+            return z
+
+        # General fallback: loop over levels (still much faster than units/metpy)
+        # anchor
+        cols = np.arange(ncol)
+        z[k_surf, cols] = z0_col
+
+        # integrate upward (k decreasing)
+        for k in range(nlev - 2, -1, -1):
+            mask = (k < k_surf)
+            if np.any(mask):
+                z[k, mask] = z[k + 1, mask] + dz[k, mask]
+
+        # integrate downward (k increasing)
+        for k in range(1, nlev):
+            mask = (k > k_surf)
+            if np.any(mask):
+                z[k, mask] = z[k - 1, mask] - dz[k - 1, mask]
+
+        return z
+
+    raise ValueError("compute_heights_fast supports only 1D or 2D arrays")
+#-----------------------------------------
 def metpy_compute_heights(p_prof_Pa, T_prof_K, RH=None, z0=0.0):
     """
     Compute ASL geometric heights from pressure + temperature using the hypsometric equation.
@@ -254,7 +404,7 @@ def extract_smallbox_ppb_optionHeight_fixed_z(
     below_ground_1d = z0_grid_1d > (z_target - float(below_ground_margin_m))
 
     # compute z profiles
-    z_2d = metpy_compute_heights(p_2d, T_2d, RH=RH_2d, z0=z0_grid_1d)
+    z_2d = compute_heights_fast(p_2d, T_2d, RH=RH_2d, z0=z0_grid_1d) #or metpy_compute_heights()
 
     diff = np.abs(z_2d - z_target)
     diff[~np.isfinite(diff)] = np.inf

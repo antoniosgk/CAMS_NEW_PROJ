@@ -56,7 +56,82 @@ def compute_w_area_small(lats_small, lons_small, earth_radius_km=EARTH_RADIUS_KM
 
     return np.clip(w_area_small, 0.0, None)
 
+import datetime as dt
+import numpy as np
 
+def season_from_datetime(ts: dt.datetime):
+    """Meteorological seasons."""
+    m = ts.month
+    if m in (12, 1, 2):
+        return "Winter"
+    if m in (3, 4, 5):
+        return "Spring"
+    if m in (6, 7, 8):
+        return "Summer"
+    return "Autumn"
+
+
+def day_night_label(lat, lon, ts: dt.datetime, tz="UTC"):
+    """
+    Returns 'day' or 'night'.
+    Tries Astral if installed; otherwise uses a simple solar-elevation approximation.
+    Assumes ts is in UTC unless you pass a tz-aware datetime.
+    """
+    # --- Try Astral (best if available) ---
+    try:
+        from astral import LocationInfo
+        from astral.sun import sun
+        import pytz
+
+        tzinfo = pytz.timezone(tz)
+        if ts.tzinfo is None:
+            ts_loc = tzinfo.localize(ts)
+        else:
+            ts_loc = ts.astimezone(tzinfo)
+
+        loc = LocationInfo(name="x", region="x", timezone=tz, latitude=float(lat), longitude=float(lon))
+        s = sun(loc.observer, date=ts_loc.date(), tzinfo=tzinfo)
+        return "day" if (s["sunrise"] <= ts_loc <= s["sunset"]) else "night"
+
+    except Exception:
+        # --- Fallback: solar elevation approximation (UTC) ---
+        # Accuracy is approximate; good enough for day/night split.
+        lat = np.deg2rad(float(lat))
+        lon = float(lon)
+
+        # fractional year
+        day_of_year = ts.timetuple().tm_yday
+        hour = ts.hour + ts.minute / 60.0
+        gamma = 2.0 * np.pi / 365.0 * (day_of_year - 1 + (hour - 12) / 24.0)
+
+        # declination (rad) and equation of time (minutes)
+        decl = (
+            0.006918
+            - 0.399912 * np.cos(gamma)
+            + 0.070257 * np.sin(gamma)
+            - 0.006758 * np.cos(2 * gamma)
+            + 0.000907 * np.sin(2 * gamma)
+            - 0.002697 * np.cos(3 * gamma)
+            + 0.001480 * np.sin(3 * gamma)
+        )
+        eqtime = 229.18 * (
+            0.000075
+            + 0.001868 * np.cos(gamma)
+            - 0.032077 * np.sin(gamma)
+            - 0.014615 * np.cos(2 * gamma)
+            - 0.040849 * np.sin(2 * gamma)
+        )
+
+        # true solar time (minutes)
+        tst = (hour * 60.0 + eqtime + 4.0 * lon) % 1440.0
+        ha = np.deg2rad((tst / 4.0) - 180.0)  # hour angle
+
+        cos_zen = np.sin(lat) * np.sin(decl) + np.cos(lat) * np.cos(decl) * np.cos(ha)
+        cos_zen = np.clip(cos_zen, -1.0, 1.0)
+        zen = np.arccos(cos_zen)
+        elev = np.rad2deg(np.pi / 2.0 - zen)
+
+        return "day" if elev > 0.0 else "night"
 # -----------------------------
 # Units conversion
 # -----------------------------
@@ -267,7 +342,45 @@ def sector_stats_weighted(df, var_name, w_col="w_area"):
             "mean_w": mean_w, "std_w": std_w, "cv_w": cv_w,
             "median_w": med_w, "q1_w": q1_w, "q3_w": q3_w, "iqr_w": iqr_w}
 
+def stats_unweighted_arr(x):
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return {"n": 0, "mean": np.nan, "std": np.nan, "cv": np.nan,
+                "median": np.nan, "q25": np.nan, "q75": np.nan, "iqr": np.nan}
 
+    mean = float(np.mean(x))
+    std = float(np.std(x, ddof=0))
+    cv = float(std / mean) if np.isfinite(mean) and mean != 0 else np.nan
+    q25 = float(np.quantile(x, 0.25))
+    med = float(np.quantile(x, 0.50))
+    q75 = float(np.quantile(x, 0.75))
+    return {"n": int(x.size), "mean": mean, "std": std, "cv": cv,
+            "median": med, "q25": q25, "q75": q75, "iqr": float(q75 - q25)}
+
+
+def stats_weighted_arr(x, w):
+    x = np.asarray(x, dtype=float)
+    w = np.asarray(w, dtype=float)
+    m = np.isfinite(x) & np.isfinite(w) & (w > 0)
+    x = x[m]; w = w[m]
+    if x.size == 0:
+        return {"n": 0, "mean_w": np.nan, "std_w": np.nan, "cv_w": np.nan,
+                "median_w": np.nan, "q1_w": np.nan, "q3_w": np.nan, "iqr_w": np.nan}
+
+    wsum = float(np.sum(w))
+    mean = float(np.sum(w * x) / wsum)
+    var = float(np.sum(w * (x - mean) ** 2) / wsum)
+    std = float(np.sqrt(var))
+    cv = float(std / mean) if mean != 0 else np.nan
+
+    q1 = float(weighted_quantile(x, w, 0.25))
+    med = float(weighted_quantile(x, w, 0.50))
+    q3 = float(weighted_quantile(x, w, 0.75))
+
+    return {"n": int(x.size),
+            "mean_w": mean, "std_w": std, "cv_w": cv,
+            "median_w": med, "q1_w": q1, "q3_w": q3, "iqr_w": float(q3 - q1)}
 # -----------------------------
 # Distance dataframe
 # -----------------------------
@@ -322,48 +435,73 @@ def run_period_cumulative_sector_timeseries(
     radii_km,
     mode="A",
     step_minutes=30,
-    weighted=True
+    weighted=True,
+    tz_for_daynight="UTC",
 ):
     import numpy as np
     import pandas as pd
     import xarray as xr
+    import datetime as dt
+    from pathlib import Path
+
+    # ---- always return a df with columns (even if empty) ----
+    expected_cols = [
+        "station","station_lat","station_lon","station_alt",
+        "model_lat","model_lon",
+        "date","time","timestamp","datetime",
+        "season","day_night",
+        "mode","sector_type","sector","radius",
+        "k_star_center","z_target_m","center_ppb",
+        "n_total","n_valid","n_excluded","frac_excluded",
+        # stats (both sets; unused will be NaN)
+        "n","mean","std","cv","median","q25","q75","iqr",
+        "mean_w","std_w","cv_w","median_w","q1_w","q3_w","iqr_w",
+    ]
+
+    def empty_outputs():
+        return pd.DataFrame(columns=expected_cols), pd.DataFrame()
 
     lat_s = float(station["Latitude"])
     lon_s = float(station["Longitude"])
     alt_s = float(station["Altitude"])
     station_name = station.get("Station_Name", "station")
 
-    # --- Find first existing timestamp for reading grid ---
+    # --- Find first existing species file to read grid ---
     lats = lons = None
     first_found = None
     for d0, t0 in iter_timestamps(start_dt, end_dt, step_minutes):
+        d0 = str(d0).zfill(8); t0 = str(t0).zfill(4)
         sp0, _, _, _, _ = build_paths(base_path, product, species, d0, t0)
+        if not Path(sp0).exists():
+            continue
         try:
-            ds0 = xr.open_dataset(sp0)
+            ds0 = xr.open_dataset(sp0, decode_times=False)
             lats = ds0["lat"].values
             lons = ds0["lon"].values
             ds0.close()
             first_found = (d0, t0)
             break
-        except FileNotFoundError:
+        except Exception:
             continue
 
     if first_found is None:
-        raise FileNotFoundError("No species files found in the requested period.")
+        return empty_outputs()
 
     i, j = nearest_grid_index(lat_s, lon_s, lats, lons)
+    model_lat = float(lats[i]) if np.ndim(lats) == 1 else float(lats[i, j])
+    model_lon = float(lons[j]) if np.ndim(lons) == 1 else float(lons[i, j])
+
     Ny, Nx = (lats.shape[0], lons.shape[0]) if np.ndim(lats) == 1 else lats.shape
     i1_s, i2_s, j1_s, j2_s, ii, jj = make_small_box_indices(i, j, Ny, Nx, cell_nums)
 
-    # small box coords
     lats_small = lats[i1_s:i2_s + 1]
     lons_small = lons[j1_s:j2_s + 1]
+    Ny_s = len(lats_small); Nx_s = len(lons_small)
+
     radii = list(range(1, cell_nums + 1))
 
-    # weights
-    w_area_small = compute_w_area_small(
-        lats_small, lons_small, earth_radius_km=EARTH_RADIUS_KM
-    ) if weighted else None
+    # weights once
+    w_area_small = compute_w_area_small(lats_small, lons_small, earth_radius_km=EARTH_RADIUS_KM) if weighted else None
 
     # sanitize radii_km thresholds
     radii_km = np.asarray(radii_km, dtype=float)
@@ -371,40 +509,56 @@ def run_period_cumulative_sector_timeseries(
     radii_km = np.unique(radii_km)
     radii_km.sort()
 
+    # ---- PRECOMPUTE MASKS ONCE (huge speed win) ----
+    ring_masks = compute_ring_sector_masks(ii, jj, Ny_s, Nx_s, radii)       # list of (Ny_s,Nx_s)
+    cum_masks = cumulative_sector_masks(ring_masks)                         # list of (Ny_s,Nx_s)
+
+    # distance grid once
+    if lats_small.ndim == 1 and lons_small.ndim == 1:
+        LON2D, LAT2D = np.meshgrid(lons_small, lats_small)
+    else:
+        LAT2D = lats_small
+        LON2D = lons_small
+    dist_km_grid = haversine_km(lat_s, lon_s, LAT2D, LON2D)
+    dist_cum_masks = [dist_km_grid <= float(dmax) for dmax in radii_km]
+
     orog_cache = OrogCache()
     rows = []
 
-    # ==============================
-    # MAIN LOOP OVER TIMESTAMPS
-    # ==============================
+    # helper to create row with all columns present
+    def make_row():
+        return {c: np.nan for c in expected_cols}
+
     for date, time in iter_timestamps(start_dt, end_dt, step_minutes):
-        # normalize formatting early
         date = str(date).zfill(8)
         time = str(time).zfill(4)
 
         spf, Tf, PLf, RHf, orogf = build_paths(base_path, product, species, date, time)
-        #  Skip if any required file is missing (no crash)
+
+        # skip missing timestep inputs
         if not all_inputs_exist(spf, Tf, PLf, RHf, orogf):
-           continue
-        ds_species = ds_T = ds_PL = ds_RH = None
-        try:
-            ds_species = xr.open_dataset(spf)
-            ds_T = xr.open_dataset(Tf)
-            ds_PL = xr.open_dataset(PLf)
-            ds_RH = xr.open_dataset(RHf)
-            ds_orog    = orog_cache.get(orogf)
-        except Exception:    
-            for ds in (ds_species, ds_T, ds_PL, ds_RH):
-                if ds is not None:
-                    try:
-                      ds.close()
-                    except Exception:
-                        pass
             continue
 
-        
+        ds_species = ds_T = ds_PL = ds_RH = None
+        try:
+            ds_species = xr.open_dataset(spf, decode_times=False)
+            ds_T       = xr.open_dataset(Tf,  decode_times=False)
+            ds_PL      = xr.open_dataset(PLf, decode_times=False)
+            ds_RH      = xr.open_dataset(RHf, decode_times=False)
+            ds_orog    = orog_cache.get(orogf)
+        except Exception:
+            for ds in (ds_species, ds_T, ds_PL, ds_RH):
+                if ds is not None:
+                    try: ds.close()
+                    except Exception: pass
+            continue
 
-        # --- build 2D ppb grid in the small box ---
+        # timestamp datetime
+        ts = dt.datetime.strptime(date + time, "%Y%m%d%H%M")
+        season = season_from_datetime(ts)
+        dn = day_night_label(lat_s, lon_s, ts, tz=tz_for_daynight)
+
+        # compute grid_ppb
         if mode.upper() == "A":
             grid_ppb, meta_v = extract_smallbox_ppb_optionA_fixed_k(
                 ds_species, ds_T, ds_PL, ds_RH, ds_orog,
@@ -424,125 +578,126 @@ def run_period_cumulative_sector_timeseries(
                 ds.close()
             raise ValueError("mode must be 'A' or 'HEIGHT'")
 
-        # robust meta extraction (covers slight naming differences)
-        k_center = meta_v.get("k_star_center", meta_v.get("k_star", None))
-        if k_center is None:
-            # last resort: keep NaN but don't crash
-            k_center = -999
-
+        k_center = meta_v.get("k_star_center", meta_v.get("k_star", -999))
         z_target = meta_v.get("z_target_m", meta_v.get("z_star_m", np.nan))
+        invalid_mask = meta_v.get("below_ground_mask", None)
 
         center_ppb = float(grid_ppb[ii, jj])
 
-        # only HEIGHT returns this; A will be None
-        invalid_mask = meta_v.get("below_ground_mask", None)
+        # global valid mask for stats
+        valid = np.isfinite(grid_ppb)
+        if invalid_mask is not None:
+            valid = valid & (~np.asarray(invalid_mask, dtype=bool))
 
-        # -----------------------------
-        # CUMULATIVE SECTORS (C1..Ck)
-        # -----------------------------
-        _, sector_masks = compute_sector_tables_generic(
-            ii, jj, lats_small, lons_small, grid_ppb, species,
-            radii=radii,
-            invalid_mask=invalid_mask,
-            w_area=w_area_small
-        )
+        # ---- CUM SECTORS (fast) ----
+        for k, mask_total in enumerate(cum_masks, start=1):
+            mask_total = np.asarray(mask_total, dtype=bool)
+            mask_valid = mask_total & valid
 
-        cum_dfs, _ = compute_cumulative_sector_tables(
-            sector_masks, lats_small, lons_small, grid_ppb, species,
-            invalid_mask=invalid_mask,
-            w_area=w_area_small
-        )
+            n_total = int(mask_total.sum())
+            n_valid = int(mask_valid.sum())
+            n_excl = int(n_total - n_valid)
+            frac_excl = float(n_excl / n_total) if n_total > 0 else np.nan
 
-        for k, df_c in enumerate(cum_dfs, start=1):
-            n_total = int(len(df_c))
-            n_valid = int(df_c["is_valid"].sum()) if "is_valid" in df_c.columns else int(np.isfinite(df_c[species]).sum())
-            n_excluded = int(n_total - n_valid)
-            frac_excluded = float(n_excluded / n_total) if n_total > 0 else np.nan
+            vals = grid_ppb[mask_valid]
 
-            st = sector_stats_weighted(df_c, species, w_col="w_area") if weighted else sector_stats_unweighted(df_c, species)
-
-            rows.append({
+            row = make_row()
+            row.update({
                 "station": station_name,
+                "station_lat": lat_s,
+                "station_lon": lon_s,
+                "station_alt": alt_s,
+                "model_lat": model_lat,
+                "model_lon": model_lon,
                 "date": date,
                 "time": time,
                 "timestamp": f"{date} {time}",
+                "datetime": ts,
+                "season": season,
+                "day_night": dn,
                 "mode": mode.upper(),
                 "sector_type": "CUM",
                 "sector": f"C{k}",
-                "radius": radii[k - 1],
+                "radius": radii[k-1],
                 "k_star_center": int(k_center),
-                "z_target_m": float(z_target),
+                "z_target_m": float(z_target) if np.isfinite(z_target) else np.nan,
                 "center_ppb": center_ppb,
                 "n_total": n_total,
                 "n_valid": n_valid,
-                "n_excluded": n_excluded,
-                "frac_excluded": frac_excluded,
-                **st,
+                "n_excluded": n_excl,
+                "frac_excluded": frac_excl,
             })
+
+            if weighted and (w_area_small is not None):
+                w = w_area_small[mask_valid]
+                row.update(stats_weighted_arr(vals, w))
+            else:
+                row.update(stats_unweighted_arr(vals))
+
+            rows.append(row)
         '''
-        # -----------------------------
-        # DISTANCE CUMULATIVE (D≤...)
-        # -----------------------------
-        df_dist = build_distance_dataframe(
-            lats_small, lons_small, grid_ppb, lat_s, lon_s,
-            var_name=species,
-            w_area=w_area_small
-        )
+        # ---- DIST CUM (fast) ----
+        for dmax, mask_total in zip(radii_km, dist_cum_masks):
+            mask_total = np.asarray(mask_total, dtype=bool)
+            mask_valid = mask_total & valid
 
-        # validity column
-        if invalid_mask is not None:
-            inv_flat = np.asarray(invalid_mask, dtype=bool).ravel()
-            df_dist["is_valid"] = ~inv_flat
-        else:
-            df_dist["is_valid"] = np.isfinite(pd.to_numeric(df_dist[species], errors="coerce"))
+            n_total = int(mask_total.sum())
+            n_valid = int(mask_valid.sum())
+            n_excl = int(n_total - n_valid)
+            frac_excl = float(n_excl / n_total) if n_total > 0 else np.nan
 
-        for dmax in radii_km:
-            df_cum = df_dist[df_dist["distance_km"] <= float(dmax)].copy()
-            if df_cum.empty:
-                continue
+            vals = grid_ppb[mask_valid]
 
-            n_total = int(len(df_cum))
-            n_valid = int(df_cum["is_valid"].sum())
-            n_excluded = int(n_total - n_valid)
-            frac_excluded = float(n_excluded / n_total) if n_total > 0 else np.nan
-
-            df_valid = df_cum[df_cum["is_valid"]].copy()
-            st = sector_stats_weighted(df_valid, species, w_col="w_area") if weighted else sector_stats_unweighted(df_valid, species)
-
-            rows.append({
+            row = make_row()
+            row.update({
                 "station": station_name,
+                "station_lat": lat_s,
+                "station_lon": lon_s,
+                "station_alt": alt_s,
+                "model_lat": model_lat,
+                "model_lon": model_lon,
                 "date": date,
                 "time": time,
                 "timestamp": f"{date} {time}",
+                "datetime": ts,
+                "season": season,
+                "day_night": dn,
                 "mode": mode.upper(),
                 "sector_type": "DISTCUM",
                 "sector": f"D≤{int(dmax)}",
                 "radius": float(dmax),
                 "k_star_center": int(k_center),
-                "z_target_m": float(z_target),
+                "z_target_m": float(z_target) if np.isfinite(z_target) else np.nan,
                 "center_ppb": center_ppb,
                 "n_total": n_total,
                 "n_valid": n_valid,
-                "n_excluded": n_excluded,
-                "frac_excluded": frac_excluded,
-                **st,
+                "n_excluded": n_excl,
+                "frac_excluded": frac_excl,
             })
+             
+            if weighted and (w_area_small is not None):
+                w = w_area_small[mask_valid]
+                row.update(stats_weighted_arr(vals, w))
+            else:
+                row.update(stats_unweighted_arr(vals))
+
+            rows.append(row)
 '''
-        # close per-timestep files
         for ds in (ds_species, ds_T, ds_PL, ds_RH):
             ds.close()
 
     orog_cache.close_all()
 
-    df_per_timestep = pd.DataFrame(rows)
-    if df_per_timestep.empty:
-        return df_per_timestep, df_per_timestep
+    df_per_timestep = pd.DataFrame.from_records(rows, columns=expected_cols)
 
-    # temporal summary
+    if df_per_timestep.empty:
+        return df_per_timestep, pd.DataFrame()
+
+    # summary (same as before)
     if weighted:
-        stat_cols = [c for c in ["n", "mean_w", "std_w", "cv_w", "median_w", "iqr_w", "q1_w", "q3_w"] if c in df_per_timestep.columns]
+        stat_cols = [c for c in ["n","mean_w","std_w","cv_w","median_w","iqr_w","q1_w","q3_w"] if c in df_per_timestep.columns]
     else:
-        stat_cols = [c for c in ["n", "mean", "std", "cv", "median", "iqr", "q25", "q75"] if c in df_per_timestep.columns]
+        stat_cols = [c for c in ["n","mean","std","cv","median","iqr","q25","q75"] if c in df_per_timestep.columns]
 
     summary = (
         df_per_timestep
@@ -550,10 +705,8 @@ def run_period_cumulative_sector_timeseries(
         .agg(["mean", "std", "median"])
     )
     summary.columns = [f"{a}_{b}" if b else a for (a, b) in summary.columns.to_flat_index()]
-    df_temporal_summary = summary
 
-    return df_per_timestep, df_temporal_summary
-
+    return df_per_timestep, summary
 
 # -----------------------------
 # Utilities you already had (kept)
