@@ -73,67 +73,72 @@ def season_from_datetime(ts: dt.datetime):
     return "Autumn"
 
 
-def day_night_label(lat, lon, ts: dt.datetime, tz="UTC"):
+import numpy as np
+import datetime as dt
+
+def day_night_label(lat, lon, ts: dt.datetime, threshold_deg=-0.833, return_elev=False):
     """
-    Returns 'day' or 'night'.
-    Tries Astral if installed; otherwise uses a simple solar-elevation approximation.
-    Assumes ts is in UTC unless you pass a tz-aware datetime.
+    Day/Night from solar elevation angle.
+    - threshold_deg = -0.833 is a common sunrise/sunset threshold (refraction + solar radius).
+    - Works with naive datetimes (assumed UTC) or aware datetimes.
+
+    Returns:
+      'day' or 'night'
+      If return_elev=True -> (label, elev_deg)
     """
-    # --- Try Astral (best if available) ---
-    try:
-        from astral import LocationInfo
-        from astral.sun import sun
-        import pytz
 
-        tzinfo = pytz.timezone(tz)
-        if ts.tzinfo is None:
-            ts_loc = tzinfo.localize(ts)
-        else:
-            ts_loc = ts.astimezone(tzinfo)
+    # normalize lon to [-180, 180]
+    lon = float(lon)
+    lon = ((lon + 180.0) % 360.0) - 180.0
+    lat_rad = np.deg2rad(float(lat))
 
-        loc = LocationInfo(name="x", region="x", timezone=tz, latitude=float(lat), longitude=float(lon))
-        s = sun(loc.observer, date=ts_loc.date(), tzinfo=tzinfo)
-        return "day" if (s["sunrise"] <= ts_loc <= s["sunset"]) else "night"
+    # treat naive timestamps as UTC
+    if ts.tzinfo is not None:
+        ts_utc = ts.astimezone(dt.timezone.utc)
+    else:
+        ts_utc = ts
 
-    except Exception:
-        # --- Fallback: solar elevation approximation (UTC) ---
-        # Accuracy is approximate; good enough for day/night split.
-        lat = np.deg2rad(float(lat))
-        lon = float(lon)
+    doy = ts_utc.timetuple().tm_yday
+    hour = ts_utc.hour + ts_utc.minute / 60.0 + ts_utc.second / 3600.0
 
-        # fractional year
-        day_of_year = ts.timetuple().tm_yday
-        hour = ts.hour + ts.minute / 60.0
-        gamma = 2.0 * np.pi / 365.0 * (day_of_year - 1 + (hour - 12) / 24.0)
+    # fractional year
+    gamma = 2.0 * np.pi / 365.0 * (doy - 1 + (hour - 12.0) / 24.0)
 
-        # declination (rad) and equation of time (minutes)
-        decl = (
-            0.006918
-            - 0.399912 * np.cos(gamma)
-            + 0.070257 * np.sin(gamma)
-            - 0.006758 * np.cos(2 * gamma)
-            + 0.000907 * np.sin(2 * gamma)
-            - 0.002697 * np.cos(3 * gamma)
-            + 0.001480 * np.sin(3 * gamma)
-        )
-        eqtime = 229.18 * (
-            0.000075
-            + 0.001868 * np.cos(gamma)
-            - 0.032077 * np.sin(gamma)
-            - 0.014615 * np.cos(2 * gamma)
-            - 0.040849 * np.sin(2 * gamma)
-        )
+    # solar declination (rad)
+    decl = (
+        0.006918
+        - 0.399912 * np.cos(gamma)
+        + 0.070257 * np.sin(gamma)
+        - 0.006758 * np.cos(2 * gamma)
+        + 0.000907 * np.sin(2 * gamma)
+        - 0.002697 * np.cos(3 * gamma)
+        + 0.001480 * np.sin(3 * gamma)
+    )
 
-        # true solar time (minutes)
-        tst = (hour * 60.0 + eqtime + 4.0 * lon) % 1440.0
-        ha = np.deg2rad((tst / 4.0) - 180.0)  # hour angle
+    # equation of time (minutes)
+    eqtime = 229.18 * (
+        0.000075
+        + 0.001868 * np.cos(gamma)
+        - 0.032077 * np.sin(gamma)
+        - 0.014615 * np.cos(2 * gamma)
+        - 0.040849 * np.sin(2 * gamma)
+    )
 
-        cos_zen = np.sin(lat) * np.sin(decl) + np.cos(lat) * np.cos(decl) * np.cos(ha)
-        cos_zen = np.clip(cos_zen, -1.0, 1.0)
-        zen = np.arccos(cos_zen)
-        elev = np.rad2deg(np.pi / 2.0 - zen)
+    # true solar time (minutes)
+    tst = (hour * 60.0 + eqtime + 4.0 * lon) % 1440.0
 
-        return "day" if elev > 0.0 else "night"
+    # hour angle (rad)
+    ha = np.deg2rad((tst / 4.0) - 180.0)
+
+    # solar zenith cos
+    cosz = np.sin(lat_rad) * np.sin(decl) + np.cos(lat_rad) * np.cos(decl) * np.cos(ha)
+    cosz = np.clip(cosz, -1.0, 1.0)
+    zen = np.arccos(cosz)
+
+    elev_deg = np.rad2deg(np.pi / 2.0 - zen)
+
+    label = "day" if elev_deg > float(threshold_deg) else "night"
+    return (label, float(elev_deg)) if return_elev else label
 # -----------------------------
 # Units conversion
 # -----------------------------
@@ -992,8 +997,7 @@ def run_period_cumulative_sector_timeseries(
             # datetime + labels
             ts = dt.datetime.strptime(date + time, "%Y%m%d%H%M")
             season = season_from_datetime(ts)
-            dn = day_night_label(lat_s, lon_s, ts, tz=tz_for_daynight)
-
+            dn = day_night_label(lat_s, lon_s, ts)
             ds_species = None
             ds_T = ds_PL = ds_RH = None
             try:
