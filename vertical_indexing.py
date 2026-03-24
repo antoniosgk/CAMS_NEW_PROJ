@@ -349,6 +349,21 @@ def extract_smallbox_ppb_optionA_fixed_k(
     meta = {"k_star_center": int(k_star), "p_hPa": float(p_hPa), "z_star_m": float(z_star),"min": np.nanmin(grid_ppb),"max":np.nanmax(grid_ppb)}
     return grid_ppb, meta
 
+def extract_smallbox_ppb_optionA_given_k(
+    ds_species,
+    species,
+    k_star,
+    i1_s, i2_s, j1_s, j2_s,
+    to_ppb_fn,
+):
+    """
+    MODE A FAST PATH:
+    - k_star is already known (computed once per day).
+    - Only extracts species at this k for the small box and converts to ppb.
+    """
+    field = ds_species[species].values[0, int(k_star), i1_s:i2_s + 1, j1_s:j2_s + 1]
+    grid_ppb = to_ppb_fn(field, species)
+    return grid_ppb
 
 def extract_smallbox_ppb_optionHeight_fixed_z(
     ds_species, ds_T, ds_PL, ds_RH, ds_orog,

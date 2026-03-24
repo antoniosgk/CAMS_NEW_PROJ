@@ -16,7 +16,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib as mpl
 import pandas as pd
 
-def _gradual_reds(n, cmap_name="Reds", start=0.85, end=0.25):
+def _gradual_reds(n, cmap_name="Reds", start=0.25, end=0.85):
     """
     Returns n colors sampled from a red colormap from dark->light.
     start/end are positions in [0,1] within the colormap.
@@ -846,7 +846,7 @@ def _ensure_datetime(df, date_col="date", time_col="time"):
 
 
 def plot_cum_sector_ratio_timeseries(
-    df_per_timestep,cmap_name="Reds",start=0.85,end=0.25,
+    df_per_timestep,cmap_name="Reds",start=0.25,end=0.85,
     ax=None,
     title=None,
     ylabel="Cumulative sector mean / center",xlim=None
@@ -926,7 +926,7 @@ def plot_cum_distance_ratio_timeseries(
     df_per_timestep,
     dist_bins_km,xlim=None,
     ax=None,
-    title=None,cmap="Reds",start=0.85,end=0.25,
+    title=None,cmap="Reds",start=0.25,end=0.85,
     ylabel="Cumulative distance mean / center",
 ):
     """

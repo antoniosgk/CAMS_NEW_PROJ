@@ -34,7 +34,7 @@ from calculation import (
 
 from vertical_indexing import (
     extract_smallbox_ppb_optionA_fixed_k,
-    extract_smallbox_ppb_optionHeight_fixed_z,
+    extract_smallbox_ppb_optionHeight_fixed_z,extract_smallbox_ppb_optionA_given_k
 )
 
 from plots import (
@@ -58,14 +58,14 @@ from io_netcdf import df30min_to_netcdf_station_species
 RUN_PERIOD = True
 
 # Period settings (only used when RUN_PERIOD=True)
-START_DT = datetime.datetime(2005, 5, 16, 0, 0)  #yyyy,m,d,hr,min
-END_DT   = datetime.datetime(2005, 5, 16, 6, 00)
+START_DT = datetime.datetime(2005, 6, 16, 8, 0)  #yyyy,m,d,hr,min
+END_DT   = datetime.datetime(2005, 6, 16, 20, 00)
 print("START_DT:", START_DT)
 print("END_DT:", END_DT)
 print("Generated timestamps:", list(iter_timestamps(START_DT, END_DT, 30)))
 # Mode works for BOTH single timestep and period
 MODE = "A"          # "A" or "HEIGHT"
-idx = 1422
+idx = 7
 cell_nums = 10
 dist_bins_km = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 out_dir = "/home/agkiokas/CAMS/plots/"
@@ -483,7 +483,7 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
 
     if not found:
         raise FileNotFoundError("No species files found in the requested period.")
-    """
+    
     ts = list(iter_timestamps(START_DT, END_DT, 30))
     print("Generated timestamps:", ts)
     
@@ -496,7 +496,7 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
         print("  PL  exists:", os.path.exists(PLf),  PLf)
         print("  RH  exists:", os.path.exists(RHf),  RHf)
         print("  orog exists:", os.path.exists(orogf),orogf)
-    """   
+    
     df_30min, df_summary = run_period_cumulative_sector_timeseries(
         base_path=base_path,
         product=product,
@@ -533,8 +533,8 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
     weighted=weighted,
     title=f"{species}: CV over time by cumulative sector ({name} {mode})",
     cmap_name="Reds",
-    start=0.85,
-    end=0.25,xlim=(start_dt,end_dt)
+    start=0.25,
+    end=0.85,xlim=(start_dt,end_dt)
 )
     fig_cv_ts.savefig(f"{out_dir}/{name}_{species}_{mode}_ts_CV_CUM.png", dpi=200)
     plt.show()
@@ -547,6 +547,7 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
     df_30min.to_csv(out_csv, index=False)
     df_summary.to_csv(out_sum, index=False)
     print(df_30min)
+    print("script ended")
     '''
     ds_out = df30min_to_netcdf_station_species(
         df_30min=df_30min,
@@ -567,16 +568,19 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
 def main():
     if RUN_PERIOD:
         start_time = time.time()
+        print(datetime.datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S'))
+        print(start_time)
         run_time_interval(mode=MODE, weighted=True,start_dt=START_DT,end_dt=END_DT,step_minutes=30)
         end_time = time.time()
-        execution_time = end_time - start_time
-        print(f"Execution time: {execution_time:.4f} seconds")
+        print(datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S'))
+        execution_time = (end_time - start_time)/60
+        print(f"Execution time: {execution_time:.2f} minutes")
     else:
         start_time = time.time()
         run_single_timestep(mode=MODE, weighted=True)
         end_time = time.time()
         execution_time = end_time - start_time
-        print(f"Execution time: {execution_time:.4f} seconds")
+        print(f"Execution time: {execution_time:.2f} seconds")
 
 
 if __name__ == "__main__":

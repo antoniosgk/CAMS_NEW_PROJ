@@ -2,12 +2,14 @@
 import numpy as np
 import pandas as pd
 import xarray as xr
+from metpy.constants import g
+from metpy.units import units as mp_units
 
 from file_utils import build_paths, iter_timestamps, OrogCache
 from horizontal_indexing import nearest_grid_index, make_small_box_indices, add_distance_bins
 from vertical_indexing import (
-    extract_smallbox_ppb_optionA_fixed_k,
-    extract_smallbox_ppb_optionHeight_fixed_z,
+    extract_smallbox_ppb_optionA_fixed_k,surface_height_grid_m,
+    extract_smallbox_ppb_optionHeight_fixed_z,extract_smallbox_ppb_optionA_given_k,metpy_find_level_index
 )
 
 
@@ -265,6 +267,48 @@ def apply_mask_to_data_arr(data_arr, invalid_mask, fill_value=np.nan):
 # -----------------------------
 # Weighted/unweighted stats
 # -----------------------------
+import numpy as np
+
+def stats_unweighted_arr(x):
+    x = np.asarray(x, dtype=float)
+    x = x[np.isfinite(x)]
+    if x.size == 0:
+        return {"n": 0, "mean": np.nan, "std": np.nan, "cv": np.nan,
+                "median": np.nan, "q25": np.nan, "q75": np.nan, "iqr": np.nan}
+
+    mean = float(np.mean(x))
+    std = float(np.std(x, ddof=0))
+    cv = float(std / mean) if np.isfinite(mean) and mean != 0 else np.nan
+    q25 = float(np.quantile(x, 0.25))
+    med = float(np.quantile(x, 0.50))
+    q75 = float(np.quantile(x, 0.75))
+    return {"n": int(x.size), "mean": mean, "std": std, "cv": cv,
+            "median": med, "q25": q25, "q75": q75, "iqr": float(q75 - q25)}
+
+
+def stats_weighted_arr(x, w):
+    x = np.asarray(x, dtype=float)
+    w = np.asarray(w, dtype=float)
+    m = np.isfinite(x) & np.isfinite(w) & (w > 0)
+    x = x[m]; w = w[m]
+    if x.size == 0:
+        return {"n": 0, "mean_w": np.nan, "std_w": np.nan, "cv_w": np.nan,
+                "median_w": np.nan, "q1_w": np.nan, "q3_w": np.nan, "iqr_w": np.nan}
+
+    wsum = float(np.sum(w))
+    mean = float(np.sum(w * x) / wsum)
+    var = float(np.sum(w * (x - mean) ** 2) / wsum)
+    std = float(np.sqrt(var))
+    cv = float(std / mean) if mean != 0 else np.nan
+
+    q1 = float(weighted_quantile(x, w, 0.25))
+    med = float(weighted_quantile(x, w, 0.50))
+    q3 = float(weighted_quantile(x, w, 0.75))
+
+    return {"n": int(x.size),
+            "mean_w": mean, "std_w": std, "cv_w": cv,
+            "median_w": med, "q1_w": q1, "q3_w": q3, "iqr_w": float(q3 - q1)}
+
 def weighted_quantile(x, w, q):
     """
     Weighted quantile for 1D arrays. q in [0, 1].
@@ -427,6 +471,7 @@ def build_distance_dataframe(lats_small, lons_small, data_arr, lat_s, lon_s, var
 # -----------------------------
 # Period runner (cumulative sectors + cumulative distance)
 # -----------------------------
+"""
 def run_period_cumulative_sector_timeseries(
     base_path, product, species,
     station,
@@ -707,7 +752,423 @@ def run_period_cumulative_sector_timeseries(
     summary.columns = [f"{a}_{b}" if b else a for (a, b) in summary.columns.to_flat_index()]
 
     return df_per_timestep, summary
+"""
+def run_period_cumulative_sector_timeseries(
+    base_path, product, species,
+    station,
+    start_dt, end_dt,
+    cell_nums,
+    radii_km,
+    mode="A",
+    step_minutes=30,
+    weighted=True,
+    tz_for_daynight="UTC",
+):
+    import numpy as np
+    import pandas as pd
+    import xarray as xr
+    import datetime as dt
+    from pathlib import Path
 
+    # ----------------------------
+    # Output schema (always present)
+    # ----------------------------
+    expected_cols = [
+        "station","station_lat","station_lon","station_alt",
+        "model_lat","model_lon",
+        "date","time","timestamp","datetime",
+        "season","day_night",
+        "mode","sector_type","sector","radius",
+        "k_star_center","z_target_m","center_ppb",
+        "n_total","n_valid","n_excluded","frac_excluded",
+        # unweighted
+        "n","mean","std","cv","median","q25","q75","iqr",
+        # weighted
+        "mean_w","std_w","cv_w","median_w","q1_w","q3_w","iqr_w",
+    ]
+
+    def empty_outputs():
+        return pd.DataFrame(columns=expected_cols), pd.DataFrame()
+
+    lat_s = float(station["Latitude"])
+    lon_s = float(station["Longitude"])
+    alt_s = float(station["Altitude"])
+    station_name = station.get("Station_Name", "station")
+
+    # --- Find first existing species file to read grid ---
+    lats = lons = None
+    first_found = None
+    for d0, t0 in iter_timestamps(start_dt, end_dt, step_minutes):
+        d0 = str(d0).zfill(8); t0 = str(t0).zfill(4)
+        sp0, _, _, _, _ = build_paths(base_path, product, species, d0, t0)
+        if not Path(sp0).exists():
+            continue
+        try:
+            ds0 = xr.open_dataset(sp0, decode_times=False)
+            lats = ds0["lat"].values
+            lons = ds0["lon"].values
+            ds0.close()
+            first_found = (d0, t0)
+            break
+        except Exception:
+            continue
+
+    if first_found is None:
+        return empty_outputs()
+
+    i, j = nearest_grid_index(lat_s, lon_s, lats, lons)
+    model_lat = float(lats[i]) if np.ndim(lats) == 1 else float(lats[i, j])
+    model_lon = float(lons[j]) if np.ndim(lons) == 1 else float(lons[i, j])
+
+    Ny, Nx = (lats.shape[0], lons.shape[0]) if np.ndim(lats) == 1 else lats.shape
+    i1_s, i2_s, j1_s, j2_s, ii, jj = make_small_box_indices(i, j, Ny, Nx, cell_nums)
+
+    lats_small = lats[i1_s:i2_s + 1]
+    lons_small = lons[j1_s:j2_s + 1]
+    Ny_s, Nx_s = len(lats_small), len(lons_small)
+
+    radii = list(range(1, cell_nums + 1))
+
+    # weights once
+    w_area_small = compute_w_area_small(lats_small, lons_small, earth_radius_km=EARTH_RADIUS_KM) if weighted else None
+
+    # sanitize distance thresholds
+    radii_km = np.asarray(radii_km, dtype=float)
+    radii_km = radii_km[np.isfinite(radii_km) & (radii_km > 0)]
+    radii_km = np.unique(radii_km)
+    radii_km.sort()
+
+    # ----------------------------
+    # Precompute masks ONCE (huge speed win)
+    # ----------------------------
+    ring_masks = compute_ring_sector_masks(ii, jj, Ny_s, Nx_s, radii)
+    cum_masks = cumulative_sector_masks(ring_masks)
+
+    # distance grid + cumulative distance masks
+    LON2D, LAT2D = np.meshgrid(lons_small, lats_small)
+    dist_km_grid = haversine_km(lat_s, lon_s, LAT2D, LON2D)
+    dist_cum_masks = [dist_km_grid <= float(dmax) for dmax in radii_km]
+
+    # ----------------------------
+    # Open orography ONCE (use first_found date)
+    # ----------------------------
+    orog_date = first_found[0]
+    _, _, _, _, orogf0 = build_paths(base_path, product, species, orog_date, first_found[1])
+    try:
+        ds_orog_global = xr.open_dataset(orogf0, decode_times=False)
+    except Exception:
+        ds_orog_global = None  # will fallback per-timestep if needed
+
+    # precompute surface height slice once if possible
+    if ds_orog_global is not None:
+        z0_grid_2d = surface_height_grid_m(ds_orog_global, i1_s, i2_s, j1_s, j2_s)
+        PHIS_c = ds_orog_global["PHIS"].isel(time=0, lat=i, lon=j).item()
+        z0_c = (PHIS_c * mp_units("m^2/s^2") / g).to("meter").magnitude
+    else:
+        z0_grid_2d = None
+        z0_c = None
+
+    # ----------------------------
+    # Helpers: fast stats on arrays
+    # ----------------------------
+    def stats_unw(vals):
+        vals = np.asarray(vals, dtype=float)
+        vals = vals[np.isfinite(vals)]
+        if vals.size == 0:
+            return {"n": 0, "mean": np.nan, "std": np.nan, "cv": np.nan,
+                    "median": np.nan, "q25": np.nan, "q75": np.nan, "iqr": np.nan}
+        mean = float(np.mean(vals))
+        std = float(np.std(vals, ddof=0))
+        cv = float(std / mean) if mean != 0 else np.nan
+        q25 = float(np.quantile(vals, 0.25))
+        med = float(np.quantile(vals, 0.50))
+        q75 = float(np.quantile(vals, 0.75))
+        return {"n": int(vals.size), "mean": mean, "std": std, "cv": cv,
+                "median": med, "q25": q25, "q75": q75, "iqr": float(q75 - q25)}
+
+    def stats_w(vals, w):
+        vals = np.asarray(vals, dtype=float)
+        w = np.asarray(w, dtype=float)
+        m = np.isfinite(vals) & np.isfinite(w) & (w > 0)
+        vals = vals[m]; w = w[m]
+        if vals.size == 0:
+            return {"n": 0, "mean_w": np.nan, "std_w": np.nan, "cv_w": np.nan,
+                    "median_w": np.nan, "q1_w": np.nan, "q3_w": np.nan, "iqr_w": np.nan}
+        wsum = float(np.sum(w))
+        mean = float(np.sum(w * vals) / wsum)
+        var = float(np.sum(w * (vals - mean) ** 2) / wsum)
+        std = float(np.sqrt(var))
+        cv = float(std / mean) if mean != 0 else np.nan
+        q1 = float(weighted_quantile(vals, w, 0.25))
+        med = float(weighted_quantile(vals, w, 0.50))
+        q3 = float(weighted_quantile(vals, w, 0.75))
+        return {"n": int(vals.size), "mean_w": mean, "std_w": std, "cv_w": cv,
+                "median_w": med, "q1_w": q1, "q3_w": q3, "iqr_w": float(q3 - q1)}
+
+    # ----------------------------
+    # Group timestamps by day
+    # ----------------------------
+    ts_list = [(str(d).zfill(8), str(t).zfill(4)) for d, t in iter_timestamps(start_dt, end_dt, step_minutes)]
+    by_day = {}
+    for d, t in ts_list:
+        by_day.setdefault(d, []).append(t)
+
+    rows = []
+
+    # ----------------------------
+    # MAIN LOOP: per day
+    # ----------------------------
+    for day, times in by_day.items():
+        times = sorted(times)
+
+        # find first valid timestep for computing daily k_star (Mode A)
+        k_star_day = None
+        z_star_day = None
+
+        if mode.upper() == "A":
+            for t0 in times:
+                spf, Tf, PLf, RHf, orogf = build_paths(base_path, product, species, day, t0)
+                if not all_inputs_exist(spf, Tf, PLf, RHf, orogf):
+                    continue
+                try:
+                    ds_T = xr.open_dataset(Tf, decode_times=False)
+                    ds_PL = xr.open_dataset(PLf, decode_times=False)
+                    ds_RH = xr.open_dataset(RHf, decode_times=False)
+
+                    # orography: use global if available, else open daily
+                    if ds_orog_global is not None:
+                        ds_orog = ds_orog_global
+                        z0c = z0_c
+                    else:
+                        ds_orog = xr.open_dataset(orogf, decode_times=False)
+                        PHIS_c2 = ds_orog["PHIS"].isel(time=0, lat=i, lon=j).item()
+                        z0c = (PHIS_c2 * mp_units("m^2/s^2") / g).to("meter").magnitude
+
+                    T_c  = ds_T["T"].values[0, :, i, j]
+                    p_c  = ds_PL["PL"].values[0, :, i, j]
+                    RH_c = ds_RH["RH"].values[0, :, i, j]
+
+                    k_star_day, p_hPa, z_star_day = metpy_find_level_index(
+                        p_prof_Pa=p_c,
+                        T_prof_K=T_c,
+                        RH=RH_c,
+                        station_alt_m=alt_s,
+                        z_surf_model=z0c,
+                    )
+
+                    ds_T.close(); ds_PL.close(); ds_RH.close()
+                    if (ds_orog_global is None) and (ds_orog is not None):
+                        ds_orog.close()
+                    break
+                except Exception:
+                    try:
+                        ds_T.close(); ds_PL.close(); ds_RH.close()
+                    except Exception:
+                        pass
+                    continue
+
+            # if we couldn't compute k_star for that day, skip the day
+            if k_star_day is None:
+                continue
+
+        # ----------------------------
+        # per timestep in this day
+        # ----------------------------
+        for t in times:
+            date = day
+            time = t
+
+            spf, Tf, PLf, RHf, orogf = build_paths(base_path, product, species, date, time)
+
+            # skip missing
+            if mode.upper() == "A":
+                # Mode A now needs only species file (k_star already known)
+                if not Path(spf).exists():
+                    continue
+            else:
+                if not all_inputs_exist(spf, Tf, PLf, RHf, orogf):
+                    continue
+
+            # datetime + labels
+            ts = dt.datetime.strptime(date + time, "%Y%m%d%H%M")
+            season = season_from_datetime(ts)
+            dn = day_night_label(lat_s, lon_s, ts, tz=tz_for_daynight)
+
+            ds_species = None
+            ds_T = ds_PL = ds_RH = None
+            try:
+                ds_species = xr.open_dataset(spf, decode_times=False)
+
+                if mode.upper() == "A":
+                    grid_ppb = extract_smallbox_ppb_optionA_given_k(
+                        ds_species, species, k_star_day,
+                        i1_s, i2_s, j1_s, j2_s,
+                        to_ppb_fn=to_ppb_mmr
+                    )
+                    meta_v = {"k_star_center": int(k_star_day), "z_star_m": float(z_star_day) if z_star_day is not None else np.nan}
+                    invalid_mask = None
+
+                else:
+                    ds_T = xr.open_dataset(Tf, decode_times=False)
+                    ds_PL = xr.open_dataset(PLf, decode_times=False)
+                    ds_RH = xr.open_dataset(RHf, decode_times=False)
+
+                    ds_orog = ds_orog_global if ds_orog_global is not None else xr.open_dataset(orogf, decode_times=False)
+
+                    grid_ppb, meta_v = extract_smallbox_ppb_optionHeight_fixed_z(
+                        ds_species, ds_T, ds_PL, ds_RH, ds_orog,
+                        species, alt_s,
+                        i, j, i1_s, i2_s, j1_s, j2_s,
+                        to_ppb_fn=to_ppb_mmr,
+                    )
+                    invalid_mask = meta_v.get("below_ground_mask", None)
+
+                    if ds_orog_global is None:
+                        ds_orog.close()
+
+            except Exception:
+                if ds_species is not None:
+                    try: ds_species.close()
+                    except Exception: pass
+                for ds in (ds_T, ds_PL, ds_RH):
+                    if ds is not None:
+                        try: ds.close()
+                        except Exception: pass
+                continue
+
+            # valid mask
+            valid = np.isfinite(grid_ppb)
+            if invalid_mask is not None:
+                valid = valid & (~np.asarray(invalid_mask, dtype=bool))
+
+            center_ppb = float(grid_ppb[ii, jj])
+
+            k_center = meta_v.get("k_star_center", -999)
+            z_target = meta_v.get("z_target_m", meta_v.get("z_star_m", np.nan))
+
+            # build rows for cum sectors
+            for k, mask_total in enumerate(cum_masks, start=1):
+                mask_total = np.asarray(mask_total, dtype=bool)
+                mask_valid = mask_total & valid
+
+                n_total = int(mask_total.sum())
+                n_valid = int(mask_valid.sum())
+                n_excl = int(n_total - n_valid)
+                frac_excl = float(n_excl / n_total) if n_total > 0 else np.nan
+
+                vals = grid_ppb[mask_valid]
+
+                rec = {c: np.nan for c in expected_cols}
+                rec.update({
+                    "station": station_name,
+                    "station_lat": lat_s,
+                    "station_lon": lon_s,
+                    "station_alt": alt_s,
+                    "model_lat": model_lat,
+                    "model_lon": model_lon,
+                    "date": date,
+                    "time": time,
+                    "timestamp": f"{date} {time}",
+                    "datetime": ts,
+                    "season": season,
+                    "day_night": dn,
+                    "mode": mode.upper(),
+                    "sector_type": "CUM",
+                    "sector": f"C{k}",
+                    "radius": radii[k-1],
+                    "k_star_center": int(k_center),
+                    "z_target_m": float(z_target) if np.isfinite(z_target) else np.nan,
+                    "center_ppb": center_ppb,
+                    "n_total": n_total,
+                    "n_valid": n_valid,
+                    "n_excluded": n_excl,
+                    "frac_excluded": frac_excl,
+                })
+
+                if weighted and (w_area_small is not None):
+                    w = w_area_small[mask_valid]
+                    rec.update(stats_w(vals, w))
+                else:
+                    rec.update(stats_unw(vals))
+
+                rows.append(rec)
+            '''
+            # build rows for cumulative distance
+            for dmax, mask_total in zip(radii_km, dist_cum_masks):
+                mask_total = np.asarray(mask_total, dtype=bool)
+                mask_valid = mask_total & valid
+
+                n_total = int(mask_total.sum())
+                n_valid = int(mask_valid.sum())
+                n_excl = int(n_total - n_valid)
+                frac_excl = float(n_excl / n_total) if n_total > 0 else np.nan
+
+                vals = grid_ppb[mask_valid]
+
+                rec = {c: np.nan for c in expected_cols}
+                rec.update({
+                    "station": station_name,
+                    "station_lat": lat_s,
+                    "station_lon": lon_s,
+                    "station_alt": alt_s,
+                    "model_lat": model_lat,
+                    "model_lon": model_lon,
+                    "date": date,
+                    "time": time,
+                    "timestamp": f"{date} {time}",
+                    "datetime": ts,
+                    "season": season,
+                    "day_night": dn,
+                    "mode": mode.upper(),
+                    "sector_type": "DISTCUM",
+                    "sector": f"D≤{int(dmax)}",
+                    "radius": float(dmax),
+                    "k_star_center": int(k_center),
+                    "z_target_m": float(z_target) if np.isfinite(z_target) else np.nan,
+                    "center_ppb": center_ppb,
+                    "n_total": n_total,
+                    "n_valid": n_valid,
+                    "n_excluded": n_excl,
+                    "frac_excluded": frac_excl,
+                })
+
+                if weighted and (w_area_small is not None):
+                    w = w_area_small[mask_valid]
+                    rec.update(stats_w(vals, w))
+                else:
+                    rec.update(stats_unw(vals))
+
+                rows.append(rec)
+'''
+            # close
+            try: ds_species.close()
+            except Exception: pass
+            for ds in (ds_T, ds_PL, ds_RH):
+                if ds is not None:
+                    try: ds.close()
+                    except Exception: pass
+
+    if ds_orog_global is not None:
+        try: ds_orog_global.close()
+        except Exception: pass
+
+    df_per_timestep = pd.DataFrame.from_records(rows, columns=expected_cols)
+    if df_per_timestep.empty:
+        return df_per_timestep, pd.DataFrame()
+
+    # summary (same as before)
+    if weighted:
+        stat_cols = [c for c in ["n","mean_w","std_w","cv_w","median_w","iqr_w","q1_w","q3_w"] if c in df_per_timestep.columns]
+    else:
+        stat_cols = [c for c in ["n","mean","std","cv","median","iqr","q25","q75"] if c in df_per_timestep.columns]
+
+    summary = (
+        df_per_timestep
+        .groupby(["station","mode","sector_type","sector"], as_index=False)[stat_cols]
+        .agg(["mean","std","median"])
+    )
+    summary.columns = [f"{a}_{b}" if b else a for (a,b) in summary.columns.to_flat_index()]
+    return df_per_timestep, summary
 # -----------------------------
 # Utilities you already had (kept)
 # -----------------------------
