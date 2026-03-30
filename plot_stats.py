@@ -17,7 +17,7 @@ species = "O3"
 mode = "A"
 units = "ppb"
 
-station = "2641A"
+station = "2629A"
 stations = ["1006A","2629A"]
 
 SECTOR_TYPE = "CUM"
@@ -30,6 +30,7 @@ MERGE_SEASONAL_YEARS = True
 SP_LIM=(20,100)
 CV_LIM=(0,10)
 RATIO_LIM=(0.75,1.25)
+
 PLOTS_DIR = "/home/agkiokas/CAMS/plots"
 STATIONS_PATH = "/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt"
 out_dir_one = f"{PLOTS_DIR}/full_analysis_one_station"
@@ -765,7 +766,7 @@ def plot_one_station_seasonal_center(
 
 def plot_multi_station_seasonal_center(
     df, stations, stations_df=None, center_col="center_ppb", mode=None,
-    species="O3", units="ppb", out_path=None, figsize=(16, 10),sp_lim=None,
+    species="O3", units="ppb", out_path=None, figsize=(16, 10), sp_lim=None,
     merge_years=False
 ):
     data = prepare_center_timeseries(df, stations=stations, center_col=center_col, mode=mode)
@@ -780,32 +781,63 @@ def plot_multi_station_seasonal_center(
 
     for ax, season in zip(axes, seasons):
         sub = data[data["season"] == season].copy()
-        shared_axis_info = None
-        if merge_years:
-            shared_axis_info = build_season_plot_axis(sub.sort_values("timestamp").copy(), merge_years=True)
+
         if sub.empty:
             ax.set_title(f"{season} (no data)")
             ax.grid(True, alpha=0.3)
             continue
 
-        for st, g in sub.groupby("station"):
-            g = g.sort_values("timestamp").copy()
+        shared_axis_info = None
+        timestamp_to_x = None
+
+        if merge_years:
+            # build ONE shared synthetic axis using unique timestamps only
+            ts_df = (
+                sub[["timestamp"]]
+                .drop_duplicates()
+                .sort_values("timestamp")
+                .reset_index(drop=True)
+            )
+            ts_df["__plot_x"] = np.arange(len(ts_df))
+            timestamp_to_x = dict(zip(ts_df["timestamp"], ts_df["__plot_x"]))
+
+            # ticks at month starts
+            ts_df["year_month"] = ts_df["timestamp"].dt.to_period("M").astype(str)
+            month_starts = ts_df.groupby("year_month", as_index=False)["__plot_x"].min()
+
+            tick_positions = month_starts["__plot_x"].tolist()
+            tick_labels = month_starts["year_month"].tolist()
+
+            if len(tick_positions) > 12:
+                step = int(np.ceil(len(tick_positions) / 12))
+                tick_positions = tick_positions[::step]
+                tick_labels = tick_labels[::step]
+
+            shared_axis_info = {
+                "x": ts_df["__plot_x"].values,
+                "tick_positions": tick_positions,
+                "tick_labels": tick_labels
+            }
+
+        station_order = sorted(sub["station"].unique())
+
+        for st in station_order:
+            g = sub[sub["station"] == st].sort_values("timestamp").copy()
+
             if merge_years:
-                # use season-wide synthetic axis positions based on sorted order within this station
-                g["__plot_x"] = np.arange(len(g))
-                x = g["__plot_x"].values
+                x = g["timestamp"].map(timestamp_to_x).values
             else:
                 x = g["timestamp"].values
+
             label = f"{st}"
             alt = alt_map.get(st, np.nan)
             if pd.notna(alt):
                 label += f" ({alt:.0f} m)"
 
             ax.plot(x, g[center_col].values, label=label)
-            stats = compute_basic_stats(g[center_col])
 
-            # stack stats boxes vertically, one per station
-            station_index = list(sorted(sub["station"].unique())).index(st)
+            stats = compute_basic_stats(g[center_col])
+            station_index = station_order.index(st)
             y_pos = 0.98 - station_index * 0.18
 
             ax.text(
@@ -816,12 +848,15 @@ def plot_multi_station_seasonal_center(
                 bbox=dict(boxstyle="round", facecolor="white", alpha=0.7),
                 fontsize=8
             )
+
         ax.set_title(season)
         ax.set_ylabel(f"{species} ({units})")
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=8)
+
         if sp_lim is not None:
             ax.set_ylim(sp_lim)
+
         if merge_years:
             ax.set_xlabel("Concatenated seasonal timeline")
             if shared_axis_info is not None and len(shared_axis_info["x"]) > 0:
@@ -1782,7 +1817,8 @@ def run_full_station_analysis(
         species=species,
         units=units,sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"{station}_{species}_full_period_{center_col}.png")
-    )
+    ) 
+    '''
     plot_one_station_ratio_meanw_to_center(
         df=df_one,
         station=station,
@@ -1796,6 +1832,7 @@ def run_full_station_analysis(
         out_path=f"{out_dir_one}/{station}_{species}_ratio_center_to_meanw_by_sector.png",
         merge_years=False
 )
+'''
     plot_one_station_cv_timeseries_full_period(
     df=df_one,
     station=station,
@@ -1888,6 +1925,7 @@ def run_full_station_analysis(
         sector_col=sector_col,
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_box_{cv_col}.png")
     )
+    '''
     plot_one_station_diurnal_cycle(
     df=df_one,
     station=station,
@@ -1918,7 +1956,7 @@ def run_full_station_analysis(
     out_path=f"{out_dir_one}/{station}_{species}_diurnal_boxplot.png",
     sp_lim=SP_LIM
 )
-    
+    '''
     pairs, corr_all, _, _ = plot_center_vs_cv_scatter(
         df=df,
         stations=station,
@@ -2070,7 +2108,7 @@ def run_full_multi_station_analysis(
         cv_sector=cv_sector,sector_col=sector_col,
     out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{cv_col}.png")
 )
-
+'''
     pairs, corr_all, _, _ = plot_center_vs_cv_scatter(
         df=df,
         stations=stations,
@@ -2166,7 +2204,7 @@ def run_full_multi_station_analysis(
         "altitude_corrs": alt_corrs,
         "pairs": pairs,
     }
-
+'''
 
 # ============================================================
 # FINAL EXECUTION BLOCK

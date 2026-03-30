@@ -9,6 +9,8 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import os
 import time
+import warnings
+warnings.filterwarnings('ignore')
 
 from file_utils import (
     base_path, product, species, stations_path,
@@ -50,25 +52,37 @@ from plots import (
 )
 
 from io_netcdf import df30min_to_netcdf_station_species
+from station_level_lookup import build_and_save_station_level_lookup
 
 #%%
 # -----------------------
 # USER SETTINGS
 # -----------------------
 RUN_PERIOD = True
+BUILD_K_LOOKUP = False
 
-# Period settings (only used when RUN_PERIOD=True)
-START_DT = datetime.datetime(2005, 6, 16, 8, 0)  #yyyy,m,d,hr,min
-END_DT   = datetime.datetime(2005, 6, 16, 20, 00)
-print("START_DT:", START_DT)
-print("END_DT:", END_DT)
-print("Generated timestamps:", list(iter_timestamps(START_DT, END_DT, 30)))
-# Mode works for BOTH single timestep and period
+START_DT = datetime.datetime(2005, 6, 16, 0, 0)
+END_DT   = datetime.datetime(2005, 6, 17, 0, 0)
+
 MODE = "A"          # "A" or "HEIGHT"
-idx = 5
+
+# station selection mode:
+#   "single" -> use STATION_IDX
+#   "list"   -> use STATION_IDXS
+#   "all"    -> all valid stations
+STATION_SELECTION = "single"
+
+STATION_IDX = 17
+STATION_IDXS = [1, 5, 8]
+
 cell_nums = 10
 dist_bins_km = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
 out_dir = "/home/agkiokas/CAMS/plots/"
+lookup_dir = "/home/agkiokas/CAMS/lookups/"
+
+LEVEL_LOOKUP_PATH = f"{lookup_dir}/station_level_timeseries.parquet"
+HORIZONTAL_LOOKUP_PATH = f"{lookup_dir}/station_horizontal_lookup.parquet"
 
 #%%
 # -----------------------
@@ -103,7 +117,35 @@ def _single_timestep_small_box_indices(i, j, Ny, Nx, cell_nums):
 def _get_time_str(ds_species):
     tval = ds_species[species]["time"].values[0]
     return pd.to_datetime(tval).strftime("%Y-%m-%d %H:%M")
+def get_target_stations(stations_df, selection="single", idx=None, idxs=None):
+    """
+    Return a DataFrame of target stations.
 
+    selection:
+      - "single": one station from idx
+      - "list": multiple stations from idxs
+      - "all": all valid stations
+    """
+    valid = stations_df[stations_df["is_valid"]].copy()
+
+    if selection == "single":
+        if idx is None:
+            raise ValueError("For selection='single', idx must be provided.")
+        row = select_station(stations_df, idx=idx)
+        return pd.DataFrame([row])
+
+    if selection == "list":
+        if idxs is None or len(idxs) == 0:
+            raise ValueError("For selection='list', idxs must be a non-empty list.")
+        rows = []
+        for one_idx in idxs:
+            rows.append(select_station(stations_df, idx=one_idx))
+        return pd.DataFrame(rows)
+
+    if selection == "all":
+        return valid.reset_index(drop=True)
+
+    raise ValueError("selection must be one of: 'single', 'list', 'all'")
 #start_time = time.time()
 # -----------------------
 # 1) SINGLE TIMESTEP
@@ -125,7 +167,7 @@ def run_single_timestep(mode="A", weighted=True):
     fig4_with_topo = True # set True if you want station map on topo background
 
     stations = load_stations(stations_path)
-    station = select_station(stations, idx)
+    station = select_station(stations, STATION_IDX)
 
     name = station["Station_Name"]
     lat_s = float(station["Latitude"])
@@ -445,109 +487,179 @@ def run_single_timestep(mode="A", weighted=True):
 # -----------------------
 # 2) TIME INTERVAL
 # -----------------------
-def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_minutes=30):
+def run_time_interval(
+    mode="A",
+    weighted=True,
+    start_dt=None,
+    end_dt=None,
+    step_minutes=30,
+    level_lookup_df=None,
+    level_lookup_path=None,
+    station_selection="single",
+    station_idx=None,
+    station_idxs=None,
+    make_plots=True,
+):
     """
-    Period analysis:
-      - runs run_period_cumulative_sector_timeseries
-      - creates ratio time-series plots
-      - saves CSV + summary + NetCDF
+    Period analysis for one, many, or all stations.
+
+    It:
+      - loads the precomputed station/timestep level lookup
+      - selects target stations
+      - runs run_period_cumulative_sector_timeseries for each station
+      - saves one CSV + one summary CSV per station
+      - optionally saves plots per station
+
+    Returns
+    -------
+    results : dict
+        Dictionary keyed by station idx:
+        results[idx] = {
+            "station_name": ...,
+            "df_30min": ...,
+            "df_summary": ...
+        }
     """
+    import os
+    from pathlib import Path
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+
     if start_dt is None:
         start_dt = START_DT
     if end_dt is None:
         end_dt = END_DT
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    # ----------------------------
+    # load stations and select targets
+    # ----------------------------
     stations = load_stations(stations_path)
-    station = select_station(stations, idx)
 
-    name = station["Station_Name"]
-    lat_s = float(station["Latitude"])
-    lon_s = float(station["Longitude"])
+    target_stations = get_target_stations(
+        stations_df=stations,
+        selection=station_selection,
+        idx=station_idx,
+        idxs=station_idxs,
+    )
 
-    # infer model cell lat/lon from first existing species file in period
-    model_lat = model_lon = None
-    found = False
-    for d0, t0 in iter_timestamps(start_dt, end_dt, step_minutes):
-        sp0, _, _, _, _ = build_paths(base_path, product, species, d0, t0)
-        try:
-            ds0 = xr.open_dataset(sp0,decode_times=False)
-            lats = ds0["lat"].values
-            lons = ds0["lon"].values
-            ds0.close()
-            i, j = nearest_grid_index(lat_s, lon_s, lats, lons)
-            model_lat = float(lats[i]) if np.ndim(lats) == 1 else float(lats[i, j])
-            model_lon = float(lons[j]) if np.ndim(lons) == 1 else float(lons[i, j])
-            found = True
-            break
-        except FileNotFoundError:
+    if target_stations.empty:
+        raise ValueError("No target stations selected.")
+
+    # ----------------------------
+    # load lookup
+    # ----------------------------
+    if level_lookup_df is None:
+        if level_lookup_path is None:
+            raise ValueError("Provide either level_lookup_df or level_lookup_path.")
+
+        level_lookup_path = Path(level_lookup_path)
+        if not level_lookup_path.exists():
+            raise FileNotFoundError(f"Lookup file not found: {level_lookup_path}")
+
+        if level_lookup_path.suffix.lower() == ".parquet":
+            level_lookup_df = pd.read_parquet(level_lookup_path)
+        elif level_lookup_path.suffix.lower() == ".csv":
+            level_lookup_df = pd.read_csv(level_lookup_path)
+        else:
+            raise ValueError(f"Unsupported lookup format: {level_lookup_path.suffix}")
+
+    level_lookup_df = level_lookup_df.copy()
+    if "time" not in level_lookup_df.columns:
+        raise ValueError("level_lookup_df must contain a 'time' column.")
+    level_lookup_df["time"] = pd.to_datetime(level_lookup_df["time"])
+
+    required_cols = {"idx", "time", "level_idx"}
+    missing = required_cols - set(level_lookup_df.columns)
+    if missing:
+        raise ValueError(f"level_lookup_df is missing required columns: {sorted(missing)}")
+
+    # ----------------------------
+    # run each station
+    # ----------------------------
+    results = {}
+
+    for _, station in target_stations.iterrows():
+        name = station["Station_Name"]
+        st_idx = int(station["idx"])
+
+        print(f"\n=== Running station: {name} (idx={st_idx}) ===")
+
+        station_lookup = level_lookup_df[level_lookup_df["idx"] == st_idx].copy()
+        station_lookup = station_lookup[
+            (station_lookup["time"] >= pd.Timestamp(start_dt)) &
+            (station_lookup["time"] <= pd.Timestamp(end_dt))
+        ].copy()
+
+        if station_lookup.empty:
+            print(f"[skip] No lookup rows found for station {name} (idx={st_idx}) in requested period.")
             continue
 
-    if not found:
-        raise FileNotFoundError("No species files found in the requested period.")
-    
-    ts = list(iter_timestamps(START_DT, END_DT, 30))
-    print("Generated timestamps:", ts)
-    
-    for (d0, t0) in ts:
-        spf, Tf, PLf, RHf, orogf = build_paths(base_path, product, species, d0, t0)
-        print(d0, t0, "->", str(spf), "exists:", os.path.exists(spf))
-        print(f"\n{d0} {t0}")
-        print("  sp  exists:", os.path.exists(spf),  spf)
-        print("  T   exists:", os.path.exists(Tf),   Tf)
-        print("  PL  exists:", os.path.exists(PLf),  PLf)
-        print("  RH  exists:", os.path.exists(RHf),  RHf)
-        print("  orog exists:", os.path.exists(orogf),orogf)
-    
-    df_30min, df_summary = run_period_cumulative_sector_timeseries(
-        base_path=base_path,
-        product=product,
-        species=species,
-        station=station,
-        start_dt=start_dt,
-        end_dt=end_dt,
-        cell_nums=cell_nums,
-        radii_km=dist_bins_km,
-        mode=mode,
-        step_minutes=step_minutes,
-        weighted=weighted
-    )
-    print("df_30min shape:", df_30min.shape)
-    print("df_30min columns:", list(df_30min.columns))
-    print(df_30min.head(5))
-    # time-series ratio plots
-    fig1, ax1 = plot_cum_sector_ratio_timeseries(
-        df_30min,xlim=(start_dt,end_dt),
-        title=f"{species}: CUM sector mean / center ({name} {mode})"
-    )
-    fig1.savefig(f"{out_dir}/{name}_{species}_ts_ratio_CUM.png", dpi=200)
-    '''
-    fig2, ax2 = plot_cum_distance_ratio_timeseries(
-        df_30min,
-        dist_bins_km=dist_bins_km,xlim=(start_dt,end_dt),
-        title=f"{species}: CUM distance mean / center ({name} {mode})"
-    )
-    fig2.savefig(f"{out_dir}/{name}_{species}_{mode}_ts_ratio_DISTCUM.png", dpi=200)
-    '''
-    # CV time-series per sector (colors match Reds palette used in rectangles/bars)
-    fig_cv_ts, ax_cv_ts = plot_cum_sector_cv_timeseries(
-    df_30min,
-    weighted=weighted,
-    title=f"{species}: CV over time by cumulative sector ({name} {mode})",
-    cmap_name="Reds",
-    start=0.25,
-    end=0.85,xlim=(start_dt,end_dt)
-)
-    fig_cv_ts.savefig(f"{out_dir}/{name}_{species}_{mode}_ts_CV_CUM.png", dpi=200)
-    plt.show()
-    
-    # save outputs
-    out_csv = f"{out_dir}/{name}_{species}_{mode}_30min.csv"
-    out_sum = f"{out_dir}/{name}_{species}_{mode}_summary.csv"
-    out_nc = f"{out_dir}/{name}_{species}_{mode}.nc"
+        df_30min, df_summary = run_period_cumulative_sector_timeseries(
+            base_path=base_path,
+            product=product,
+            species=species,
+            station=station,
+            start_dt=start_dt,
+            end_dt=end_dt,
+            cell_nums=cell_nums,
+            radii_km=dist_bins_km,
+            mode=mode,
+            step_minutes=step_minutes,
+            weighted=weighted,
+            level_lookup_df=station_lookup,
+        )
 
-    df_30min.to_csv(out_csv, index=False)
-    df_summary.to_csv(out_sum, index=False)
-    print(df_30min)
-    print("script ended")
+        if df_30min.empty:
+            print(f"[skip] No output rows produced for station {name} (idx={st_idx}).")
+            continue
+
+        # save CSVs automatically
+        out_csv = f"{out_dir}/{name}_{species}_{mode}_30min.csv"
+        out_sum = f"{out_dir}/{name}_{species}_{mode}_summary.csv"
+
+        df_30min.to_csv(out_csv, index=False)
+        df_summary.to_csv(out_sum, index=False)
+
+        print("Saved:", out_csv)
+        print("Saved:", out_sum)
+
+        # plots
+        if make_plots:
+            fig1, ax1 = plot_cum_sector_ratio_timeseries(
+                df_30min,
+                xlim=(start_dt, end_dt),
+                title=f"{species}: CUM sector mean / center ({name} {mode})"
+            )
+            fig1.savefig(f"{out_dir}/{name}_{species}_{mode}_ts_ratio_CUM.png", dpi=200)
+            plt.close(fig1)
+
+            fig_cv_ts, ax_cv_ts = plot_cum_sector_cv_timeseries(
+                df_30min,
+                weighted=weighted,
+                title=f"{species}: CV over time by cumulative sector ({name} {mode})",
+                cmap_name="Reds",
+                start=0.25,
+                end=0.85,
+                xlim=(start_dt, end_dt)
+            )
+            fig_cv_ts.savefig(f"{out_dir}/{name}_{species}_{mode}_ts_CV_CUM.png", dpi=200)
+            plt.close(fig_cv_ts)
+
+        results[st_idx] = {
+            "station_name": name,
+            "df_30min": df_30min,
+            "df_summary": df_summary,
+        }
+
+    if not results:
+        print("No station produced output.")
+    else:
+        print(f"\nFinished. Stations with output: {len(results)}")
+
+    return results
     '''
     ds_out = df30min_to_netcdf_station_species(
         df_30min=df_30min,
@@ -559,29 +671,62 @@ def run_time_interval(mode="A", weighted=True,start_dt=None,end_dt=None,step_min
         mode=mode,
         weighted=weighted
     )
-    '''
+    
     print("Saved:", out_csv)
     print("Saved:", out_sum)
     #print("Wrote:", out_nc)
-
+'''
 
 def main():
-    if RUN_PERIOD:
-        start_time = time.time()
+    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(lookup_dir, exist_ok=True)
+    if BUILD_K_LOOKUP:
+        start_time=time.time()
         print(datetime.datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S'))
         print(start_time)
-        run_time_interval(mode=MODE, weighted=True,start_dt=START_DT,end_dt=END_DT,step_minutes=30)
+        hlookup, lookup_df = build_and_save_station_level_lookup(
+            stations_path=stations_path,
+            base_path=base_path,
+            product=product,
+            species_for_grid=species,
+            start_dt=START_DT,
+            end_dt=END_DT,
+            step_minutes=30,
+            out_horizontal_path=HORIZONTAL_LOOKUP_PATH,
+            out_lookup_path=LEVEL_LOOKUP_PATH,
+        )
+        print("Saved horizontal lookup:", HORIZONTAL_LOOKUP_PATH)
+        print("Saved level lookup:", LEVEL_LOOKUP_PATH)
         end_time = time.time()
         print(datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S'))
         execution_time = (end_time - start_time)/60
         print(f"Execution time: {execution_time:.2f} minutes")
+    if RUN_PERIOD:
+        start_time = time.time()
+        print(datetime.datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S'))
+        print(start_time)
+        results=run_time_interval(mode=MODE,
+            weighted=True,
+            start_dt=START_DT,
+            end_dt=END_DT,
+            step_minutes=30,
+            level_lookup_path=LEVEL_LOOKUP_PATH,
+            station_selection=STATION_SELECTION,
+            station_idx=STATION_IDX,
+            station_idxs=STATION_IDXS,
+            make_plots=True,)
+        end_time = time.time()
+        print(datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S'))
+        execution_time = (end_time - start_time)/60
+        print(f"Execution time: {execution_time:.2f} minutes")
+    '''    
     else:
         start_time = time.time()
         run_single_timestep(mode=MODE, weighted=True)
         end_time = time.time()
         execution_time = end_time - start_time
         print(f"Execution time: {execution_time:.2f} seconds")
-
+'''
 
 if __name__ == "__main__":
     main()
