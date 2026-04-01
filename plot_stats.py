@@ -17,7 +17,7 @@ species = "O3"
 mode = "A"
 units = "ppb"
 
-station = "2629A"
+station = "1006A"
 stations = ["1006A","2629A"]
 
 SECTOR_TYPE = "CUM"
