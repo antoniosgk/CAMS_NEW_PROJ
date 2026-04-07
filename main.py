@@ -58,10 +58,10 @@ from station_level_lookup import build_and_save_station_level_lookup # type: ign
 # USER SETTINGS
 # -----------------------
 RUN_PERIOD = True
-BUILD_K_LOOKUP = False  #True when we want to build the parquet files
+BUILD_K_LOOKUP = False  #True when we want to build the parquet files,i have already done that!!
 
 START_DT = datetime.datetime(2005, 5, 16, 0, 00)
-END_DT   = datetime.datetime(2007, 6, 16, 0, 0)
+END_DT   = datetime.datetime(2005, 5, 17, 0, 0)
 
 MODE = "A"          # "A" or "HEIGHT"
 
@@ -69,9 +69,9 @@ MODE = "A"          # "A" or "HEIGHT"
 #   "single" -> use STATION_IDX
 #   "list"   -> use STATION_IDXS
 #   "all"    -> all valid stations
-STATION_SELECTION = "single"
+STATION_SELECTION = "all"
 
-STATION_IDX = 1422
+STATION_IDX = 1001
 STATION_IDXS = [1, 5, 8]
 
 # lookup generation selection mode:
@@ -88,6 +88,11 @@ dist_bins_km = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 
 out_dir = "/home/agkiokas/CAMS/plots/"
 lookup_dir = "/home/agkiokas/CAMS/lookups/"
+
+USE_HYBRID_K_LOOKUP = True   #True because k const for stations a
+VARIABLE_K_STATIONS = [474, 732, 1001, 1120, 1209, 1324, 1784]   # replace with your real station idx values
+
+CONSTANT_K_LOOKUP_PATH = f"{lookup_dir}/station_constant_k_only_lookup.csv"
 
 if LOOKUP_STATION_SELECTION == "single":
     HORIZONTAL_LOOKUP_PATH = f"{lookup_dir}/station_horizontal_lookup_idx{LOOKUP_STATION_IDX}.parquet"
@@ -138,6 +143,13 @@ def _single_timestep_small_box_indices(i, j, Ny, Nx, cell_nums):
 def _get_time_str(ds_species):
     tval = ds_species[species]["time"].values[0]
     return pd.to_datetime(tval).strftime("%Y-%m-%d %H:%M")
+def load_constant_k_lookup(path):
+    df = pd.read_csv(path)
+    required = {"idx", "level_idx"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Constant-k lookup missing required columns: {sorted(missing)}")
+    return df
 def get_target_stations(stations_df, selection="single", idx=None, idxs=None):
     """
     Return a DataFrame of target stations.
@@ -520,6 +532,9 @@ def run_time_interval(
     station_idx=None,
     station_idxs=None,
     make_plots=True,
+    constant_k_lookup_path=None,
+    variable_k_stations=None,
+    use_hybrid_k_lookup=False,
 ):
     """
     Period analysis for one, many, or all stations.
@@ -596,7 +611,16 @@ def run_time_interval(
     missing = required_cols - set(level_lookup_df.columns)
     if missing:
         raise ValueError(f"level_lookup_df is missing required columns: {sorted(missing)}")
+    if variable_k_stations is None:
+        variable_k_stations = []
 
+    variable_k_stations = set(int(x) for x in variable_k_stations)
+
+    constant_k_df = None
+    if use_hybrid_k_lookup:
+        if constant_k_lookup_path is None:
+            raise ValueError("constant_k_lookup_path must be provided when use_hybrid_k_lookup=True")
+        constant_k_df = load_constant_k_lookup(constant_k_lookup_path)
     # ----------------------------
     # run each station
     # ----------------------------
@@ -608,15 +632,33 @@ def run_time_interval(
 
         print(f"\n=== Running station: {name} (idx={st_idx}) ===")
 
-        station_lookup = level_lookup_df[level_lookup_df["idx"] == st_idx].copy()
-        station_lookup = station_lookup[
-            (station_lookup["time"] >= pd.Timestamp(start_dt)) &
-            (station_lookup["time"] <= pd.Timestamp(end_dt))
-        ].copy()
+                # hybrid logic:
+        # - variable-k stations -> use full timestep parquet lookup
+        # - all others -> use constant-k lookup
+        if use_hybrid_k_lookup and (st_idx not in variable_k_stations):
+            station_lookup = None
 
-        if station_lookup.empty:
-            print(f"[skip] No lookup rows found for station {name} (idx={st_idx}) in requested period.")
-            continue
+            row_const = constant_k_df[constant_k_df["idx"] == st_idx]
+            if row_const.empty:
+                print(f"[skip] No constant-k row found for station {name} (idx={st_idx}).")
+                continue
+
+            constant_k_row = row_const.iloc[0]
+            lookup_mode = "constant"
+
+        else:
+            station_lookup = level_lookup_df[level_lookup_df["idx"] == st_idx].copy()
+            station_lookup = station_lookup[
+                (station_lookup["time"] >= pd.Timestamp(start_dt)) &
+                (station_lookup["time"] <= pd.Timestamp(end_dt))
+            ].copy()
+
+            if station_lookup.empty:
+                print(f"[skip] No timestep lookup rows found for station {name} (idx={st_idx}) in requested period.")
+                continue
+
+            constant_k_row = None
+            lookup_mode = "timestep"
 
         df_30min, df_summary = run_period_cumulative_sector_timeseries(
             base_path=base_path,
@@ -631,6 +673,8 @@ def run_time_interval(
             step_minutes=step_minutes,
             weighted=weighted,
             level_lookup_df=station_lookup,
+            constant_k_row=constant_k_row,
+            lookup_mode=lookup_mode,
         )
 
         if df_30min.empty:
@@ -729,7 +773,8 @@ def main():
         start_time = time.time()
         print(datetime.datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S'))
         print(start_time)
-        results=run_time_interval(mode=MODE,
+        results = run_time_interval(
+            mode=MODE,
             weighted=True,
             start_dt=START_DT,
             end_dt=END_DT,
@@ -738,7 +783,11 @@ def main():
             station_selection=STATION_SELECTION,
             station_idx=STATION_IDX,
             station_idxs=STATION_IDXS,
-            make_plots=True,)
+            make_plots=True,
+            constant_k_lookup_path=CONSTANT_K_LOOKUP_PATH,
+            variable_k_stations=VARIABLE_K_STATIONS,
+            use_hybrid_k_lookup=USE_HYBRID_K_LOOKUP,
+        )
         end_time = time.time()
         print(datetime.datetime.fromtimestamp(end_time).strftime('%Y-%m-%d %H:%M:%S'))
         execution_time = (end_time - start_time)/60

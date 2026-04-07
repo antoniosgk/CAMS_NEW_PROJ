@@ -769,6 +769,8 @@ def run_period_cumulative_sector_timeseries(
     weighted=True,
     tz_for_daynight="UTC",
     level_lookup_df=None,
+    constant_k_row=None,
+    lookup_mode="timestep",
 ):
     import numpy as np
     import pandas as pd
@@ -791,8 +793,14 @@ def run_period_cumulative_sector_timeseries(
     def empty_outputs():
         return pd.DataFrame(columns=expected_cols), pd.DataFrame()
 
-    if level_lookup_df is None:
-        raise ValueError("level_lookup_df must be provided.")
+    if lookup_mode not in {"timestep", "constant"}:
+        raise ValueError("lookup_mode must be 'timestep' or 'constant'")
+
+    if lookup_mode == "timestep" and level_lookup_df is None:
+        raise ValueError("level_lookup_df must be provided when lookup_mode='timestep'")
+
+    if lookup_mode == "constant" and constant_k_row is None:
+        raise ValueError("constant_k_row must be provided when lookup_mode='constant'")
 
     lat_s = float(station["Latitude"])
     lon_s = float(station["Longitude"])
@@ -800,17 +808,21 @@ def run_period_cumulative_sector_timeseries(
     station_name = station.get("Station_Name", "station")
     station_idx = int(station["idx"])
 
-    level_lookup_df = level_lookup_df.copy()
-    level_lookup_df["time"] = pd.to_datetime(level_lookup_df["time"])
+    if lookup_mode == "timestep":
+        level_lookup_df = level_lookup_df.copy()
+        level_lookup_df["time"] = pd.to_datetime(level_lookup_df["time"])
 
-    required_lookup_cols = {"idx", "time", "level_idx"}
-    missing_lookup = required_lookup_cols - set(level_lookup_df.columns)
-    if missing_lookup:
-        raise ValueError(f"level_lookup_df missing required columns: {sorted(missing_lookup)}")
+        required_lookup_cols = {"idx", "time", "level_idx"}
+        missing_lookup = required_lookup_cols - set(level_lookup_df.columns)
+        if missing_lookup:
+            raise ValueError(f"level_lookup_df missing required columns: {sorted(missing_lookup)}")
 
-    station_lookup = level_lookup_df[level_lookup_df["idx"] == station_idx].copy()
-    if station_lookup.empty:
-        raise ValueError(f"No precomputed lookup rows found for station idx={station_idx}")
+        station_lookup = level_lookup_df[level_lookup_df["idx"] == station_idx].copy()
+        if station_lookup.empty:
+            raise ValueError(f"No precomputed lookup rows found for station idx={station_idx}")
+
+    else:
+        station_lookup = None
 
     # find first existing species file to get grid
     lats = lons = None
@@ -833,19 +845,33 @@ def run_period_cumulative_sector_timeseries(
 
     if first_found is None:
         return empty_outputs()
+    if lookup_mode == "constant":
+        if {"i", "j"}.issubset(constant_k_row.index):
+            i = int(constant_k_row["i"])
+            j = int(constant_k_row["j"])
+        else:
+            i, j = nearest_grid_index(lat_s, lon_s, lats, lons)
 
-    if {"i", "j"}.issubset(station_lookup.columns):
-        i = int(station_lookup["i"].iloc[0])
-        j = int(station_lookup["j"].iloc[0])
+        model_lat = float(constant_k_row["model_lat"]) if "model_lat" in constant_k_row.index else (
+            float(lats[i]) if np.ndim(lats) == 1 else float(lats[i, j])
+        )
+        model_lon = float(constant_k_row["model_lon"]) if "model_lon" in constant_k_row.index else (
+            float(lons[j]) if np.ndim(lons) == 1 else float(lons[i, j])
+        )
+
     else:
-        i, j = nearest_grid_index(lat_s, lon_s, lats, lons)
+        if {"i", "j"}.issubset(station_lookup.columns):
+            i = int(station_lookup["i"].iloc[0])
+            j = int(station_lookup["j"].iloc[0])
+        else:
+            i, j = nearest_grid_index(lat_s, lon_s, lats, lons)
 
-    model_lat = float(station_lookup["model_lat"].iloc[0]) if "model_lat" in station_lookup.columns else (
-        float(lats[i]) if np.ndim(lats) == 1 else float(lats[i, j])
-    )
-    model_lon = float(station_lookup["model_lon"].iloc[0]) if "model_lon" in station_lookup.columns else (
-        float(lons[j]) if np.ndim(lons) == 1 else float(lons[i, j])
-    )
+        model_lat = float(station_lookup["model_lat"].iloc[0]) if "model_lat" in station_lookup.columns else (
+            float(lats[i]) if np.ndim(lats) == 1 else float(lats[i, j])
+        )
+        model_lon = float(station_lookup["model_lon"].iloc[0]) if "model_lon" in station_lookup.columns else (
+            float(lons[j]) if np.ndim(lons) == 1 else float(lons[i, j])
+        )
 
     Ny, Nx = (lats.shape[0], lons.shape[0]) if np.ndim(lats) == 1 else lats.shape
     i1_s, i2_s, j1_s, j2_s, ii, jj = make_small_box_indices(i, j, Ny, Nx, cell_nums)
@@ -904,6 +930,9 @@ def run_period_cumulative_sector_timeseries(
                 "median_w": med, "q1_w": q1, "q3_w": q3, "iqr_w": float(q3 - q1)}
 
     def get_lookup_row(ts):
+        if lookup_mode == "constant":
+            return constant_k_row
+
         r = station_lookup[station_lookup["time"] == pd.Timestamp(ts)]
         if r.empty:
             return None

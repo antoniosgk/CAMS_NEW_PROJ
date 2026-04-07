@@ -17,7 +17,7 @@ species = "O3"
 mode = "A"
 units = "ppb"
 
-station = "1006A"
+station = "2641A"
 stations = ["1006A","2629A"]
 
 SECTOR_TYPE = "CUM"
@@ -1818,7 +1818,7 @@ def run_full_station_analysis(
         units=units,sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"{station}_{species}_full_period_{center_col}.png")
     ) 
-    '''
+    
     plot_one_station_ratio_meanw_to_center(
         df=df_one,
         station=station,
@@ -1832,7 +1832,7 @@ def run_full_station_analysis(
         out_path=f"{out_dir_one}/{station}_{species}_ratio_center_to_meanw_by_sector.png",
         merge_years=False
 )
-'''
+
     plot_one_station_cv_timeseries_full_period(
     df=df_one,
     station=station,
