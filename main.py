@@ -61,7 +61,7 @@ RUN_PERIOD = True
 BUILD_K_LOOKUP = False  #True when we want to build the parquet files,i have already done that!!
 
 START_DT = datetime.datetime(2005, 5, 16, 0, 00)
-END_DT   = datetime.datetime(2005, 5, 17, 0, 0)
+END_DT   = datetime.datetime(2005, 5, 16, 23, 30)
 
 MODE = "A"          # "A" or "HEIGHT"
 
@@ -69,7 +69,7 @@ MODE = "A"          # "A" or "HEIGHT"
 #   "single" -> use STATION_IDX
 #   "list"   -> use STATION_IDXS
 #   "all"    -> all valid stations
-STATION_SELECTION = "all"
+STATION_SELECTION = "single"
 
 STATION_IDX = 1001
 STATION_IDXS = [1, 5, 8]
