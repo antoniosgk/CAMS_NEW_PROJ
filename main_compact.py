@@ -39,15 +39,15 @@ END_DT   = dt.datetime(2007, 6, 16, 0, 0)
 MODE = "A"                   # only "A" implemented in this compact script
 
 STATION_SELECTION = "list"    # "single", "list", "all"
-STATION_IDX = 1001
-STATION_IDXS = [474, 732, 1001]
+STATION_IDX = 1
+STATION_IDXS = [0,2,3,4,5,6,7,8,9,10]
 
 STEP_MINUTES = 30
 CELL_NUMS = 10
 DIST_BINS_KM = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 
 WEIGHTED = True
-SAVE_CSV = True
+SAVE_CSV = False
 SAVE_PARQUET = True
 
 # Hybrid k lookup

@@ -17,7 +17,7 @@ species = "O3"
 mode = "A"
 units = "ppb"
 
-station = "2641A"
+station = "1001A"
 stations = ["1006A","2629A"]
 
 SECTOR_TYPE = "CUM"
@@ -28,9 +28,10 @@ AGGREGATE_CV_OVER_SECTORS = False
 CV_SECTOR="C1"
 MERGE_SEASONAL_YEARS = True
 SP_LIM=(20,100)
-CV_LIM=(0,10)
-RATIO_LIM=(0.75,1.25)
+CV_LIM=(0,20)
+RATIO_LIM=(0.7,1.3)
 
+PARQUET_CSV_DIR="/home/agkiokas/CAMS/stations_csv_parquet/"
 PLOTS_DIR = "/home/agkiokas/CAMS/plots"
 STATIONS_PATH = "/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt"
 out_dir_one = f"{PLOTS_DIR}/full_analysis_one_station"
@@ -91,8 +92,19 @@ def add_local_time_top_axis(ax, utc_offset=8):
 # ============================================================
 # 2. DATA LOADER
 # ============================================================
+def read_station_table(file_path: str) -> pd.DataFrame:
+    path = Path(file_path)
+    suffix = path.suffix.lower()
+
+    if suffix == ".csv":
+        return pd.read_csv(path)
+    elif suffix in [".parquet", ".pq"]:
+        return pd.read_parquet(path)
+    else:
+        raise ValueError(f"Unsupported file format: {suffix}. Supported: .csv, .parquet, .pq")
+    
 def load_station_timeseries_csv(csv_path: str, station_name: str = None) -> pd.DataFrame:
-    df = pd.read_csv(csv_path)
+    df = read_station_table(csv_path)
 
     if "timestamp" in df.columns:
         ts = pd.to_datetime(df["timestamp"], errors="coerce")
@@ -128,24 +140,29 @@ def load_many_station_csvs(
     species: str,
     mode: str,
     station_names,
-    pattern_template: str = "{station}_{species}_{mode}_30min.csv"
+    pattern_template_csv: str = "{station}_{species}_{mode}_30min.csv",
+    pattern_template_parquet: str = "{station}_{species}_{mode}_30min.parquet"
 ) -> pd.DataFrame:
     input_dir = Path(input_dir)
     all_dfs = []
 
     for st in station_names:
-        filename = pattern_template.format(station=st, species=species, mode=mode)
-        csv_path = input_dir / filename
+        csv_path = input_dir / pattern_template_csv.format(station=st, species=species, mode=mode)
+        parquet_path = input_dir / pattern_template_parquet.format(station=st, species=species, mode=mode)
 
-        if not csv_path.exists():
-            print(f"Skipping missing file: {csv_path}")
+        if csv_path.exists():
+            file_path = csv_path
+        elif parquet_path.exists():
+            file_path = parquet_path
+        else:
+            print(f"Skipping missing file for station {st}: neither CSV nor Parquet found")
             continue
 
-        tmp = load_station_timeseries_csv(str(csv_path), station_name=st)
+        tmp = load_station_timeseries_csv(str(file_path), station_name=st)
         all_dfs.append(tmp)
 
     if not all_dfs:
-        raise ValueError("No station CSVs were loaded.")
+        raise ValueError("No station files were loaded.")
 
     return pd.concat(all_dfs, ignore_index=True)
 
@@ -2213,8 +2230,21 @@ if __name__ == "__main__":
     stations_df = load_stations_file(STATIONS_PATH)
 
     if RUN_MODE in ["one", "both"]:
+        csv_path = Path(PARQUET_CSV_DIR) / f"{station}_{species}_{mode}_30min.csv"
+        parquet_path = Path(PARQUET_CSV_DIR) / f"{station}_{species}_{mode}_30min.parquet"
+
+        if csv_path.exists():
+            file_path = csv_path
+        elif parquet_path.exists():
+            file_path = parquet_path
+        else:
+            raise FileNotFoundError(
+                f"No input file found for station {station}. "
+                f"Checked: {csv_path} and {parquet_path}"
+            )
+
         df_one = load_station_timeseries_csv(
-            f"{PLOTS_DIR}/{station}_{species}_{mode}_30min.csv",
+            str(file_path),
             station_name=station
         )
         df_one = attach_station_metadata(df_one, stations_df)
