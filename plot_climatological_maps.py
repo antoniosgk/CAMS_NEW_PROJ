@@ -11,7 +11,9 @@ import xarray as xr
 # ============================================================
 # USER SETTINGS
 # ============================================================
-
+STATION_LIST = None
+# Example:
+# STATION_LIST = ["1001A", "1006A", "2209A"]
 PARQUET_DIR = Path("/home/agkiokas/CAMS/stations_csv_parquet")
 NC_DIR = Path("/mnt/store01/agkiokas/CAMS/inst/subsets/O3/")
 NC_GLOB = "*.nc4"                     # e.g. "*.nc4" or "*.nc"
@@ -87,6 +89,7 @@ def get_station_meta(df: pd.DataFrame) -> dict:
         "alt": float(row["station_alt"]),
         "i_center": int(row["i_center"]),
         "j_center": int(row["j_center"]),
+        "k_star_center": int(row["k_star_center"]) if pd.notna(row["k_star_center"]) else np.nan,
     }
 
 
@@ -302,11 +305,11 @@ def guess_lat_lon_names(ds: xr.Dataset) -> tuple[str, str]:
 def extract_2d_field(ds: xr.Dataset, var_name: str, level_index: Optional[int] = None) -> xr.DataArray:
     da = ds[var_name]
 
-    # If already 2D, return as-is
+    # already 2D
     if da.ndim == 2:
         return da
 
-    # squeeze singleton dims first
+    # squeeze singleton dims
     for dim in list(da.dims):
         if da.sizes[dim] == 1:
             da = da.isel({dim: 0})
@@ -314,13 +317,12 @@ def extract_2d_field(ds: xr.Dataset, var_name: str, level_index: Optional[int] =
     if da.ndim == 2:
         return da
 
-    # handle 3D fields with vertical dimension
+    # handle vertical dimension
     if da.ndim == 3:
         level_dim_candidates = ["lev", "level", "plev", "layer", "alt", "z"]
         level_dim = next((d for d in level_dim_candidates if d in da.dims), None)
 
         if level_dim is None:
-            # fallback: assume first dim is vertical if not lat/lon
             non_xy_dims = [d for d in da.dims if d.lower() not in ["lat", "latitude", "lon", "longitude"]]
             if len(non_xy_dims) == 1:
                 level_dim = non_xy_dims[0]
@@ -332,10 +334,15 @@ def extract_2d_field(ds: xr.Dataset, var_name: str, level_index: Optional[int] =
 
         if level_index is None:
             raise ValueError(
-                f"Variable {var_name} is 3D with dims {da.dims}. Please set FIELD_LEVEL_INDEX."
+                f"Variable {var_name} is 3D with dims {da.dims}. A station-specific level index is required."
             )
 
-        da = da.isel({level_dim: level_index})
+        if level_index < 0 or level_index >= da.sizes[level_dim]:
+            raise ValueError(
+                f"Requested level index {level_index} is out of bounds for dim {level_dim} with size {da.sizes[level_dim]}"
+            )
+
+        da = da.isel({level_dim: int(level_index)})
 
         if da.ndim == 2:
             return da
@@ -344,24 +351,44 @@ def extract_2d_field(ds: xr.Dataset, var_name: str, level_index: Optional[int] =
         f"Variable {var_name} is not reducible to 2D automatically. Current dims: {da.dims}."
     )
 
-def climatological_mean_map_from_files(nc_dir: Path, pattern: str, var_name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+
+
+def extract_cumulative_square_window(arr2d: np.ndarray, i_center: int, j_center: int, radius: int) -> np.ndarray:
+    i0 = max(0, int(i_center) - int(radius))
+    i1 = min(arr2d.shape[0], int(i_center) + int(radius) + 1)
+    j0 = max(0, int(j_center) - int(radius))
+    j1 = min(arr2d.shape[1], int(j_center) + int(radius) + 1)
+    return arr2d[i0:i1, j0:j1]
+
+
+def list_nc_files(nc_dir: Path, pattern: str) -> list[Path]:
     files = sorted(nc_dir.glob(pattern))
     if not files:
         raise FileNotFoundError(f"No files matched {nc_dir / pattern}")
+    return files
 
+
+def compute_station_specific_clim_mean_map(
+    nc_files: list[Path],
+    var_name: str,
+    level_index: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute the climatological mean 2D map for one specific vertical level.
+    """
     sum_field = None
     count_field = None
     lat2d = None
     lon2d = None
 
-    for fp in files:
+    for fp in nc_files:
         with xr.open_dataset(fp) as ds:
             lat_name, lon_name = guess_lat_lon_names(ds)
-            da2d = extract_2d_field(ds, var_name, level_index=FIELD_LEVEL_INDEX)
+            da2d = extract_2d_field(ds, var_name, level_index=level_index)
 
             vals = np.asarray(da2d.values, dtype=float)
 
-            # lat/lon
             lat = np.asarray(ds[lat_name].values)
             lon = np.asarray(ds[lon_name].values)
 
@@ -390,21 +417,31 @@ def climatological_mean_map_from_files(nc_dir: Path, pattern: str, var_name: str
     return clim_mean, lat2d, lon2d
 
 
-def extract_cumulative_square_window(arr2d: np.ndarray, i_center: int, j_center: int, radius: int) -> np.ndarray:
-    i0 = max(0, int(i_center) - int(radius))
-    i1 = min(arr2d.shape[0], int(i_center) + int(radius) + 1)
-    j0 = max(0, int(j_center) - int(radius))
-    j1 = min(arr2d.shape[1], int(j_center) + int(radius) + 1)
-    return arr2d[i0:i1, j0:j1]
-
-
-def compute_approach4_for_station(summary_row: pd.Series, clim_mean_map: np.ndarray, lat2d: np.ndarray) -> float:
+def compute_approach4_for_station(
+    summary_row: pd.Series,
+    nc_files: list[Path],
+) -> float:
+    """
+    Approach 4:
+    For this station, use its own k_star_center to build the climatological mean 2D map,
+    then compute the spatial CV in the selected neighborhood.
+    """
     if pd.isna(summary_row.get("a4_radius", np.nan)):
+        return np.nan
+
+    if pd.isna(summary_row.get("k_star_center", np.nan)):
         return np.nan
 
     radius = int(summary_row["a4_radius"])
     i_center = int(summary_row["i_center"])
     j_center = int(summary_row["j_center"])
+    k_center = int(summary_row["k_star_center"])
+
+    clim_mean_map, lat2d, lon2d = compute_station_specific_clim_mean_map(
+        nc_files=nc_files,
+        var_name=FIELD_VAR,
+        level_index=k_center
+    )
 
     vals = extract_cumulative_square_window(clim_mean_map, i_center, j_center, radius)
 
@@ -427,6 +464,10 @@ def compute_approach4_for_station(summary_row: pd.Series, clim_mean_map: np.ndar
 
 def main():
     parquet_files = sorted([p for p in PARQUET_DIR.glob("*.parquet") if "_summary" not in p.name])
+
+    if STATION_LIST is not None:
+        wanted = set(STATION_LIST)
+        parquet_files = [p for p in parquet_files if p.stem.split("_")[0] in wanted]
     if not parquet_files:
         raise FileNotFoundError(f"No parquet files found in {PARQUET_DIR}")
 
@@ -444,9 +485,9 @@ def main():
 
     # Approach 4 from NC files
     try:
-        clim_mean_map, lat2d, lon2d = climatological_mean_map_from_files(NC_DIR, NC_GLOB, FIELD_VAR)
+        nc_files = list_nc_files(NC_DIR, NC_GLOB)
         summary["approach4_clim_map_cv_pct"] = summary.apply(
-            lambda r: compute_approach4_for_station(r, clim_mean_map, lat2d),
+            lambda r: compute_approach4_for_station(r, nc_files),
             axis=1
         )
     except Exception as e:
