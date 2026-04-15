@@ -2,7 +2,8 @@
 import math
 from pathlib import Path
 from typing import Optional, Iterable
-
+import time
+import datetime as dt
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -11,16 +12,17 @@ import xarray as xr
 # ============================================================
 # USER SETTINGS
 # ============================================================
-STATION_LIST = None
+#STATION_LIST = None
 # Example:
-# STATION_LIST = ["1001A", "1006A", "2209A"]
+STATION_LIST = ["1001A", "1002A"]
+MAP_EXTENT = [110, 130, 30, 45]   # [lon_min, lon_max, lat_min, lat_max] or None
 PARQUET_DIR = Path("/home/agkiokas/CAMS/stations_csv_parquet")
 NC_DIR = Path("/mnt/store01/agkiokas/CAMS/inst/subsets/O3/")
 NC_GLOB = "*.nc4"                     # e.g. "*.nc4" or "*.nc"
 FIELD_VAR = "O3"                      # change to your model variable name
 
 OUT_DIR = Path("/home/agkiokas/CAMS/climatological_plots/")
-FIELD_LEVEL_INDEX = 22   # choose the vertical level index you want
+#FIELD_LEVEL_INDEX = 22   # choose the vertical level index you want
 # General filters for parquet-based approaches
 MODE_FILTER = "A"                     # e.g. "A" or None
 DAY_NIGHT_FILTER = None               # "day", "night", or None
@@ -159,6 +161,7 @@ def plot_station_map(
     cbar_label: str,
     cmap: str = "viridis",
     outfile: Optional[Path] = None,
+    extent: Optional[list[float]] = None,
 ):
     try:
         import cartopy.crs as ccrs
@@ -170,6 +173,9 @@ def plot_station_map(
         ax.add_feature(cfeature.BORDERS, linewidth=0.5)
         ax.add_feature(cfeature.LAND, alpha=0.3)
         ax.add_feature(cfeature.OCEAN, alpha=0.2)
+
+        if extent is not None:
+            ax.set_extent(extent, crs=ccrs.PlateCarree())
 
         sc = ax.scatter(
             df_summary["lon"],
@@ -207,6 +213,11 @@ def plot_station_map(
 
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
+
+        if extent is not None:
+            ax.set_xlim(extent[0], extent[1])
+            ax.set_ylim(extent[2], extent[3])
+
         ax.set_title(title)
         plt.colorbar(sc, ax=ax, label=cbar_label)
         ax.grid(True, alpha=0.3)
@@ -215,7 +226,6 @@ def plot_station_map(
     if outfile is not None:
         fig.savefig(outfile, dpi=200, bbox_inches="tight")
     plt.show()
-
 
 # ============================================================
 # APPROACHES 1, 2, 3, 5 FROM PARQUET
@@ -368,14 +378,28 @@ def list_nc_files(nc_dir: Path, pattern: str) -> list[Path]:
         raise FileNotFoundError(f"No files matched {nc_dir / pattern}")
     return files
 
+def build_level_to_stations(summary: pd.DataFrame) -> dict[int, list[int]]:
+    """
+    Returns dict:
+        level_index -> list of row indices in summary
+    """
+    level_map = {}
+    for idx, row in summary.iterrows():
+        if pd.isna(row.get("k_star_center", np.nan)):
+            continue
+        k = int(row["k_star_center"])
+        level_map.setdefault(k, []).append(idx)
+    return level_map
 
-def compute_station_specific_clim_mean_map(
+
+def compute_climatological_mean_map_for_level(
     nc_files: list[Path],
     var_name: str,
     level_index: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Compute the climatological mean 2D map for one specific vertical level.
+    Compute one climatological 2D mean map for a given vertical level.
+    Reused for all stations sharing the same k_star_center.
     """
     sum_field = None
     count_field = None
@@ -417,45 +441,54 @@ def compute_station_specific_clim_mean_map(
     return clim_mean, lat2d, lon2d
 
 
-def compute_approach4_for_station(
-    summary_row: pd.Series,
+def compute_approach4_grouped_by_level(
+    summary: pd.DataFrame,
     nc_files: list[Path],
-) -> float:
+) -> pd.Series:
     """
-    Approach 4:
-    For this station, use its own k_star_center to build the climatological mean 2D map,
-    then compute the spatial CV in the selected neighborhood.
+    Fast Approach 4:
+    compute one climatological mean map per unique k_star_center,
+    then evaluate all stations that belong to that level.
     """
-    if pd.isna(summary_row.get("a4_radius", np.nan)):
-        return np.nan
+    result = pd.Series(np.nan, index=summary.index, dtype=float)
 
-    if pd.isna(summary_row.get("k_star_center", np.nan)):
-        return np.nan
+    level_map = build_level_to_stations(summary)
 
-    radius = int(summary_row["a4_radius"])
-    i_center = int(summary_row["i_center"])
-    j_center = int(summary_row["j_center"])
-    k_center = int(summary_row["k_star_center"])
+    for k_level, row_indices in level_map.items():
+        print(f"Approach 4: computing climatological map for level {k_level} ({len(row_indices)} stations)")
 
-    clim_mean_map, lat2d, lon2d = compute_station_specific_clim_mean_map(
-        nc_files=nc_files,
-        var_name=FIELD_VAR,
-        level_index=k_center
-    )
+        clim_mean_map, lat2d, lon2d = compute_climatological_mean_map_for_level(
+            nc_files=nc_files,
+            var_name=FIELD_VAR,
+            level_index=k_level
+        )
 
-    vals = extract_cumulative_square_window(clim_mean_map, i_center, j_center, radius)
+        for idx in row_indices:
+            row = summary.loc[idx]
 
-    if A4_WEIGHTED:
-        lat_win = extract_cumulative_square_window(lat2d, i_center, j_center, radius)
-        weights = np.cos(np.deg2rad(lat_win))
-        mean_, std_ = weighted_mean_and_std(vals, weights)
-    else:
-        mean_, std_ = weighted_mean_and_std(vals, None)
+            if pd.isna(row.get("a4_radius", np.nan)):
+                result.loc[idx] = np.nan
+                continue
 
-    if pd.isna(mean_) or mean_ == 0:
-        return np.nan
+            radius = int(row["a4_radius"])
+            i_center = int(row["i_center"])
+            j_center = int(row["j_center"])
 
-    return 100.0 * std_ / mean_
+            vals = extract_cumulative_square_window(clim_mean_map, i_center, j_center, radius)
+
+            if A4_WEIGHTED:
+                lat_win = extract_cumulative_square_window(lat2d, i_center, j_center, radius)
+                weights = np.cos(np.deg2rad(lat_win))
+                mean_, std_ = weighted_mean_and_std(vals, weights)
+            else:
+                mean_, std_ = weighted_mean_and_std(vals, None)
+
+            if pd.isna(mean_) or mean_ == 0:
+                result.loc[idx] = np.nan
+            else:
+                result.loc[idx] = 100.0 * std_ / mean_
+
+    return result
 
 
 # ============================================================
@@ -463,6 +496,8 @@ def compute_approach4_for_station(
 # ============================================================
 
 def main():
+    start = time.time()
+    print("Start:", dt.datetime.fromtimestamp(start).strftime("%Y-%m-%d %H:%M:%S"))
     parquet_files = sorted([p for p in PARQUET_DIR.glob("*.parquet") if "_summary" not in p.name])
 
     if STATION_LIST is not None:
@@ -486,9 +521,9 @@ def main():
     # Approach 4 from NC files
     try:
         nc_files = list_nc_files(NC_DIR, NC_GLOB)
-        summary["approach4_clim_map_cv_pct"] = summary.apply(
-            lambda r: compute_approach4_for_station(r, nc_files),
-            axis=1
+        summary["approach4_clim_map_cv_pct"] = compute_approach4_grouped_by_level(
+            summary=summary,
+            nc_files=nc_files
         )
     except Exception as e:
         print(f"Approach 4 not computed: {e}")
@@ -503,7 +538,7 @@ def main():
         metric_col="center_mean_time_ppb",
         title="Approach 1: Temporal mean of center_ppb",
         cbar_label="ppb",
-        cmap="viridis",
+        cmap="viridis",extent=MAP_EXTENT,
         outfile=OUT_DIR / "map_approach1_center_mean.png",
     )
 
@@ -512,7 +547,7 @@ def main():
         metric_col="center_temporal_cv_pct",
         title="Approach 2: Temporal CV of center_ppb",
         cbar_label="CV (%)",
-        cmap="magma",
+        cmap="magma",extent=MAP_EXTENT,
         outfile=OUT_DIR / "map_approach2_center_temporal_cv.png",
     )
 
@@ -521,7 +556,7 @@ def main():
         metric_col="approach3_ratio_pct",
         title=f"Approach 3: mean(std_w)/mean(mean_w) | sector_type={A35_SECTOR_TYPE}, sector={A35_SECTOR}",
         cbar_label="Ratio (%)",
-        cmap="plasma",
+        cmap="plasma",extent=MAP_EXTENT,
         outfile=OUT_DIR / "map_approach3_ratio.png",
     )
 
@@ -530,21 +565,23 @@ def main():
         metric_col="approach5_mean_cvw_pct",
         title=f"Approach 5: time-mean cv_w | sector_type={A35_SECTOR_TYPE}, sector={A35_SECTOR}",
         cbar_label="CV (%)",
-        cmap="inferno",
+        cmap="inferno",extent=MAP_EXTENT,
         outfile=OUT_DIR / "map_approach5_mean_cvw.png",
     )
-
+    
     if summary["approach4_clim_map_cv_pct"].notna().any():
         plot_station_map(
             summary,
             metric_col="approach4_clim_map_cv_pct",
             title=f"Approach 4: CV from climatological mean map | sector_type={A4_SECTOR_TYPE}, sector={A4_SECTOR}",
             cbar_label="CV (%)",
-            cmap="cividis",
+            cmap="cividis",extent=MAP_EXTENT,
             outfile=OUT_DIR / "map_approach4_clim_map_cv.png",
         )
 
-
+    end = time.time()
+    print("End:", dt.datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"))
+    print(f"Execution time: {(end - start) / 60:.2f} minutes")
 if __name__ == "__main__":
     main()
 # %%
