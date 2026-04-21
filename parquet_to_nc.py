@@ -23,7 +23,7 @@ SPECIES = "O3"
 #   None              -> convert all stations found
 #   [1001]            -> convert one station
 #   [474, 732, 1001]  -> convert multiple stations
-STATION_IDXS = None
+STATION_IDXS = [0]
 
 # Skip unreadable parquet files instead of stopping
 SKIP_BAD_FILES = True
@@ -37,7 +37,6 @@ SUMMARY_TOKEN = "_summary"
 # ============================================================
 
 DEFAULT_2D_VARS = [
-    "n_total", "n_valid", "n_excluded", "frac_excluded",
     "n", "mean", "std", "cv", "median", "q25", "q75", "iqr",
     "n_w", "mean_w", "std_w", "cv_w", "median_w", "q1_w", "q3_w", "iqr_w",
 ]
@@ -106,7 +105,7 @@ def station_df_to_xarray(
         "time": ("time", times),
         "sector": ("sector", np.array(sectors, dtype=object)),
     })
-
+    '''
     # radius as sector coordinate if uniquely mapped
     if "radius" in sdf.columns:
         radius_map = (
@@ -118,7 +117,7 @@ def station_df_to_xarray(
         if radius_map["sector"].nunique() == len(sectors):
             radius_map = radius_map.set_index("sector").reindex(sectors)
             ds = ds.assign_coords(radius=("sector", radius_map["radius"].to_numpy(dtype=float)))
-
+'''
     # 2D variables: (time, sector)
     for var in two_d_vars:
         if var not in sdf.columns:

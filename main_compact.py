@@ -38,9 +38,9 @@ END_DT   = dt.datetime(2007, 6, 16, 0, 0)
 
 MODE = "A"                   # only "A" implemented in this compact script
 
-STATION_SELECTION = "list"    # "single", "list", "all"
-STATION_IDX = 1
-STATION_IDXS = [0,2,3,4,5,6,7,8,9,10]
+STATION_SELECTION = "all"    # "single", "list", "all"
+STATION_IDX = 14
+STATION_IDXS = [21,22,23,24,15,16,17,18,19,20]
 
 STEP_MINUTES = 30
 CELL_NUMS = 10
@@ -60,7 +60,7 @@ product = "inst3d"
 species = "O3"
 
 stations_path = "/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt"
-out_dir = "/home/agkiokas/CAMS/stations_csv_parquet/"
+out_dir = "/mnt/store01/agkiokas/CAMS/stations_parquet/"
 lookup_dir = "/home/agkiokas/CAMS/lookups/"
 
 HORIZONTAL_LOOKUP_PATH = f"{lookup_dir}/station_horizontal_lookup_all.parquet"
