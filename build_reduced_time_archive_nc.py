@@ -25,7 +25,7 @@ STATION_LIST = None
 # STATION_LIST = ["1001A", "1006A", "2209A"]
 
 # chunking
-CHUNKS = {"time": 96, "lev": 1, "lat": 256, "lon": 256}
+CHUNKS = {"time": 48, "lev": 1, "lat": 256, "lon": 256}
 
 # Dask scheduler: "threads", "processes", or "single-threaded"
 DASK_SCHEDULER = "threads"
