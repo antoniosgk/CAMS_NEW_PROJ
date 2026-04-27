@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 # ============================================================
 
 PARQUET_DIR = Path("/path/to/full_station_parquets")
-STATION_LIST = ["1001A", "1006A", "2209A"]   # set None for all
+STATION_LIST = ["1001A", "1002A", "1003A"]   # set None for all
 
 # choose which climatology to use
 CLIM_KIND = "all"        # "all", "season", "day_night"
@@ -354,3 +354,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# %%
