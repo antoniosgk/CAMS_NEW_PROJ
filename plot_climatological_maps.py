@@ -14,9 +14,9 @@ import xarray as xr
 # ============================================================
 #STATION_LIST = None
 # Example:
-STATION_LIST = ["1001A", "1002A"]
-MAP_EXTENT = [110, 130, 30, 45]   # [lon_min, lon_max, lat_min, lat_max] or None
-PARQUET_DIR = Path("/home/agkiokas/CAMS/stations_csv_parquet")
+STATION_LIST = ["1001A", "1003A","1004A","1005A","1006A","1007A"]
+MAP_EXTENT = None   # [lon_min, lon_max, lat_min, lat_max] or None
+PARQUET_DIR = Path("/mnt/store01/agkiokas/CAMS/stations_parquet/")
 NC_DIR = Path("/mnt/store01/agkiokas/CAMS/inst/subsets/O3/")
 NC_GLOB = "*.nc4"                     # e.g. "*.nc4" or "*.nc"
 FIELD_VAR = "O3"                      # change to your model variable name
@@ -25,12 +25,19 @@ OUT_DIR = Path("/home/agkiokas/CAMS/climatological_plots/")
 #FIELD_LEVEL_INDEX = 22   # choose the vertical level index you want
 # General filters for parquet-based approaches
 MODE_FILTER = "A"                     # e.g. "A" or None
-DAY_NIGHT_FILTER = None               # "day", "night", or None
-SEASON_FILTER = None                  # "Winter", "Spring", ... or None
+CLIM_GROUPS = [
+    ("all", None, None),
+    ("day", "day", None),
+    ("night", "night", None),
+    ("Winter", None, "Winter"),
+    ("Spring", None, "Spring"),
+    ("Summer", None, "Summer"),
+    ("Autumn", None, "Autumn"),
+]
 
 # Approaches 3 and 5 controls
 A35_SECTOR_TYPE = "CUM"               # e.g. "CUM"
-A35_SECTOR = "C1"                     # e.g. "C1"; set None to aggregate all sectors
+A35_SECTOR = "C10"                     # e.g. "C1"; set None to aggregate all sectors
 A35_AGGREGATE_OVER_SECTORS = False    # True => average over sectors per timestamp
 
 # Approach 4 controls
@@ -66,17 +73,21 @@ def load_station_parquet(path: Path) -> pd.DataFrame:
     return df
 
 
-def apply_common_filters(df: pd.DataFrame) -> pd.DataFrame:
+def apply_common_filters(
+    df: pd.DataFrame,
+    day_night_filter: Optional[str] = None,
+    season_filter: Optional[str] = None,
+) -> pd.DataFrame:
     out = df.copy()
 
     if MODE_FILTER is not None and "mode" in out.columns:
         out = out[out["mode"] == MODE_FILTER]
 
-    if DAY_NIGHT_FILTER is not None and "day_night" in out.columns:
-        out = out[out["day_night"] == DAY_NIGHT_FILTER]
+    if day_night_filter is not None and "day_night" in out.columns:
+        out = out[out["day_night"] == day_night_filter]
 
-    if SEASON_FILTER is not None and "season" in out.columns:
-        out = out[out["season"] == SEASON_FILTER]
+    if season_filter is not None and "season" in out.columns:
+        out = out[out["season"] == season_filter]
 
     out = out.dropna(subset=["timestamp"]).copy()
     return out
@@ -133,6 +144,28 @@ def get_sector_stat_timeseries(
     out = out[cols].dropna()
     return out.sort_values("timestamp")
 
+def metric_limits(df: pd.DataFrame, metric_col: str) -> tuple[float, float]:
+    vals = df[metric_col].replace([np.inf, -np.inf], np.nan).dropna()
+    if vals.empty:
+        return np.nan, np.nan
+    return float(vals.min()), float(vals.max())
+def metric_limits_across_groups(group_summaries: dict[str, pd.DataFrame], metric_col: str) -> tuple[float, float]:
+    vals = []
+
+    for df in group_summaries.values():
+        if metric_col in df.columns:
+            v = df[metric_col].replace([np.inf, -np.inf], np.nan).dropna()
+            vals.append(v)
+
+    if not vals:
+        return np.nan, np.nan
+
+    all_vals = pd.concat(vals)
+
+    if all_vals.empty:
+        return np.nan, np.nan
+
+    return float(all_vals.min()), float(all_vals.max())
 
 def weighted_mean_and_std(values: np.ndarray, weights: Optional[np.ndarray] = None) -> tuple[float, float]:
     v = np.asarray(values, dtype=float)
@@ -162,13 +195,31 @@ def plot_station_map(
     cmap: str = "viridis",
     outfile: Optional[Path] = None,
     extent: Optional[list[float]] = None,
+    vmin: Optional[float] = None,
+    vmax: Optional[float] = None,
 ):
     try:
         import cartopy.crs as ccrs
         import cartopy.feature as cfeature
+        import matplotlib.ticker as mticker
 
         fig = plt.figure(figsize=FIGSIZE)
         ax = plt.axes(projection=ccrs.PlateCarree())
+        gl = ax.gridlines(
+        draw_labels=True,
+        linewidth=0.5,
+        color="gray",
+        alpha=0.5,
+        linestyle="--"
+           )
+
+        gl.top_labels = False
+        gl.right_labels = False
+
+        gl.xlabel_style = {"size": 10}
+        gl.ylabel_style = {"size": 10}
+        gl.xlocator = mticker.MaxNLocator(6)
+        gl.ylocator = mticker.MaxNLocator(6)
         ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
         ax.add_feature(cfeature.BORDERS, linewidth=0.5)
         ax.add_feature(cfeature.LAND, alpha=0.3)
@@ -178,14 +229,16 @@ def plot_station_map(
             ax.set_extent(extent, crs=ccrs.PlateCarree())
 
         sc = ax.scatter(
-            df_summary["lon"],
-            df_summary["lat"],
-            c=df_summary[metric_col],
-            cmap=cmap,
-            s=70,
-            edgecolor="k",
-            transform=ccrs.PlateCarree(),
-        )
+        df_summary["lon"],
+        df_summary["lat"],
+        c=df_summary[metric_col],
+        cmap=cmap,
+        s=70,
+        edgecolor="k",
+        vmin=vmin,
+        vmax=vmax,
+        transform=ccrs.PlateCarree(),
+)
 
         if LABEL_STATIONS:
             for _, r in df_summary.iterrows():
@@ -200,13 +253,15 @@ def plot_station_map(
     except Exception:
         fig, ax = plt.subplots(figsize=FIGSIZE)
         sc = ax.scatter(
-            df_summary["lon"],
-            df_summary["lat"],
-            c=df_summary[metric_col],
-            cmap=cmap,
-            s=70,
-            edgecolor="k",
-        )
+        df_summary["lon"],
+        df_summary["lat"],
+        c=df_summary[metric_col],
+        cmap=cmap,
+        s=70,
+        edgecolor="k",
+        vmin=vmin,
+        vmax=vmax,
+)
         if LABEL_STATIONS:
             for _, r in df_summary.iterrows():
                 ax.text(r["lon"], r["lat"], str(r["station"]), fontsize=8)
@@ -231,9 +286,17 @@ def plot_station_map(
 # APPROACHES 1, 2, 3, 5 FROM PARQUET
 # ============================================================
 
-def compute_station_metrics_from_parquet(path: Path) -> dict:
+def compute_station_metrics_from_parquet(
+    path: Path,
+    day_night_filter: Optional[str] = None,
+    season_filter: Optional[str] = None,
+) -> dict:
     df = load_station_parquet(path)
-    df = apply_common_filters(df)
+    df = apply_common_filters(
+    df,
+    day_night_filter=day_night_filter,
+    season_filter=season_filter,
+)
 
     if df.empty:
         raise ValueError(f"{path.name}: no data after filters")
@@ -494,90 +557,99 @@ def compute_approach4_grouped_by_level(
 # ============================================================
 # MAIN
 # ============================================================
-
 def main():
     start = time.time()
     print("Start:", dt.datetime.fromtimestamp(start).strftime("%Y-%m-%d %H:%M:%S"))
+
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+
     parquet_files = sorted([p for p in PARQUET_DIR.glob("*.parquet") if "_summary" not in p.name])
 
     if STATION_LIST is not None:
         wanted = set(STATION_LIST)
         parquet_files = [p for p in parquet_files if p.stem.split("_")[0] in wanted]
+
     if not parquet_files:
         raise FileNotFoundError(f"No parquet files found in {PARQUET_DIR}")
 
-    rows = []
-    for fp in parquet_files:
-        try:
-            rows.append(compute_station_metrics_from_parquet(fp))
-        except Exception as e:
-            print(f"Skipping {fp.name}: {e}")
+    group_summaries = {}
 
-    if not rows:
-        raise RuntimeError("No station summaries were computed")
+    for group_name, day_night_filter, season_filter in CLIM_GROUPS:
+        print(f"\nComputing group: {group_name}")
 
-    summary = pd.DataFrame(rows).sort_values("station").reset_index(drop=True)
+        rows = []
 
-    # Approach 4 from NC files
-    try:
-        nc_files = list_nc_files(NC_DIR, NC_GLOB)
-        summary["approach4_clim_map_cv_pct"] = compute_approach4_grouped_by_level(
-            summary=summary,
-            nc_files=nc_files
-        )
-    except Exception as e:
-        print(f"Approach 4 not computed: {e}")
-        summary["approach4_clim_map_cv_pct"] = np.nan
+        for fp in parquet_files:
+            try:
+                rows.append(
+                    compute_station_metrics_from_parquet(
+                        fp,
+                        day_night_filter=day_night_filter,
+                        season_filter=season_filter,
+                    )
+                )
+            except Exception as e:
+                print(f"Skipping {fp.name} for group {group_name}: {e}")
 
-    summary.to_csv(OUT_DIR / "station_climatology_summary.csv", index=False)
-    print(summary)
+        if not rows:
+            print(f"No data for group {group_name}")
+            continue
 
-    # Maps
-    plot_station_map(
-        summary,
-        metric_col="center_mean_time_ppb",
-        title="Approach 1: Temporal mean of center_ppb",
-        cbar_label="ppb",
-        cmap="viridis",extent=MAP_EXTENT,
-        outfile=OUT_DIR / "map_approach1_center_mean.png",
-    )
+        summary = pd.DataFrame(rows).sort_values("station").reset_index(drop=True)
+        group_summaries[group_name] = summary
 
-    plot_station_map(
-        summary,
-        metric_col="center_temporal_cv_pct",
-        title="Approach 2: Temporal CV of center_ppb",
-        cbar_label="CV (%)",
-        cmap="magma",extent=MAP_EXTENT,
-        outfile=OUT_DIR / "map_approach2_center_temporal_cv.png",
-    )
+        summary.to_csv(OUT_DIR / f"station_climatology_summary_{group_name}.csv", index=False)
 
-    plot_station_map(
-        summary,
-        metric_col="approach3_ratio_pct",
-        title=f"Approach 3: mean(std_w)/mean(mean_w) | sector_type={A35_SECTOR_TYPE}, sector={A35_SECTOR}",
-        cbar_label="Ratio (%)",
-        cmap="plasma",extent=MAP_EXTENT,
-        outfile=OUT_DIR / "map_approach3_ratio.png",
-    )
+    if not group_summaries:
+        raise RuntimeError("No group summaries were computed")
 
-    plot_station_map(
-        summary,
-        metric_col="approach5_mean_cvw_pct",
-        title=f"Approach 5: time-mean cv_w | sector_type={A35_SECTOR_TYPE}, sector={A35_SECTOR}",
-        cbar_label="CV (%)",
-        cmap="inferno",extent=MAP_EXTENT,
-        outfile=OUT_DIR / "map_approach5_mean_cvw.png",
-    )
-    
-    if summary["approach4_clim_map_cv_pct"].notna().any():
-        plot_station_map(
-            summary,
-            metric_col="approach4_clim_map_cv_pct",
-            title=f"Approach 4: CV from climatological mean map | sector_type={A4_SECTOR_TYPE}, sector={A4_SECTOR}",
-            cbar_label="CV (%)",
-            cmap="cividis",extent=MAP_EXTENT,
-            outfile=OUT_DIR / "map_approach4_clim_map_cv.png",
-        )
+    approach_settings = {
+        "center_mean_time_ppb": {
+            "title": "Approach 1: Temporal mean of center_ppb",
+            "cbar": "ppb",
+            "cmap": "viridis",
+            "outfile_prefix": "map_approach1_center_mean",
+        },
+        "center_temporal_cv_pct": {
+            "title": "Approach 2: Temporal CV of center_ppb",
+            "cbar": "CV (%)",
+            "cmap": "magma",
+            "outfile_prefix": "map_approach2_center_temporal_cv",
+        },
+        "approach3_ratio_pct": {
+            "title": f"Approach 3: mean(std_w)/mean(mean_w) | sector_type={A35_SECTOR_TYPE}, sector={A35_SECTOR}",
+            "cbar": "Ratio (%)",
+            "cmap": "plasma",
+            "outfile_prefix": "map_approach3_ratio",
+        },
+        "approach5_mean_cvw_pct": {
+            "title": f"Approach 5: Time-mean weighted CV | sector_type={A35_SECTOR_TYPE}, sector={A35_SECTOR}",
+            "cbar": "CV (%)",
+            "cmap": "inferno",
+            "outfile_prefix": "map_approach5_mean_cvw",
+        },
+    }
+
+    for metric_col, cfg in approach_settings.items():
+        vmin, vmax = metric_limits_across_groups(group_summaries, metric_col)
+
+        print(f"\nCommon colorbar for {metric_col}: vmin={vmin:.3f}, vmax={vmax:.3f}")
+
+        for group_name, summary in group_summaries.items():
+            if metric_col not in summary.columns:
+                continue
+
+            plot_station_map(
+                summary,
+                metric_col=metric_col,
+                title=f"{cfg['title']} | {group_name}",
+                cbar_label=cfg["cbar"],
+                cmap=cfg["cmap"],
+                extent=MAP_EXTENT,
+                outfile=OUT_DIR / f"{cfg['outfile_prefix']}_{group_name}.png",
+                vmin=vmin,
+                vmax=vmax,
+            )
 
     end = time.time()
     print("End:", dt.datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"))

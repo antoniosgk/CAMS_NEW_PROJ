@@ -21,7 +21,7 @@ STATION_LIST = ["1001A","1003A","1004A","1005A","1006A","1007A"]
 #STATION_LIST = None   # use all stations found in PARQUET_DIR
 
 # choose climatology context
-CLIM_KIND = "season"              # "all", "season", "day_night", "season_day_night"
+CLIM_KIND = "season_day_night"              # "all", "season", "day_night", "season_day_night"
 SEASON_NAME = "Spring"         # used for "season" and "season_day_night"
 DAY_NIGHT_NAME = "day"         # used for "day_night" and "season_day_night"
 
