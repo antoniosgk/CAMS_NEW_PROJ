@@ -34,8 +34,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
 
 
-N_WORKERS = 8          # try 4, 8, 12 depending on server
-CHUNK_SIZE = 200       # each worker processes 200 files
+N_WORKERS = 2          # try 4, 8, 12 depending on server
+CHUNK_SIZE = 50       # each worker processes 200 files
 
 
 def process_file_chunk(file_chunk, shape3, lat2d, lon2d):

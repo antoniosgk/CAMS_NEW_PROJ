@@ -40,7 +40,7 @@ MODE = "A"                   # only "A" implemented in this compact script
 
 STATION_SELECTION = "list"    # "single", "list", "all"
 STATION_IDX = 14
-STATION_IDXS = [i for i in range(650, 700)]
+STATION_IDXS = [i for i in range(950, 1000)]
 
 STEP_MINUTES = 30
 CELL_NUMS = 10

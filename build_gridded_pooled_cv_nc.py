@@ -27,7 +27,7 @@ AREA_WEIGHTED = True
 SAVE_MEAN_STD_COUNT = True
 
 THRESHOLD_DEG = -0.833
-PRINT_EVERY = 200
+PRINT_EVERY = 100
 
 
 # ============================================================

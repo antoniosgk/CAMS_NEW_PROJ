@@ -17,11 +17,11 @@ PARQUET_DIR = Path("/mnt/store01/agkiokas/CAMS/stations_parquet/")
 LEVEL_LOOKUP_FILE = Path("/home/agkiokas/CAMS/lookups/station_level_lookup.parquet")
 
 # choose stations
-STATION_LIST = ["1001A","1003A","1004A","1005A","1006A","1007A"]
-#STATION_LIST = None   # use all stations found in PARQUET_DIR
+#STATION_LIST = ["1001A","1003A","1004A","1005A","1006A","1007A"]
+STATION_LIST = None   # use all stations found in PARQUET_DIR
 
 # choose climatology context
-CLIM_KIND = "season_day_night"              # "all", "season", "day_night", "season_day_night"
+CLIM_KIND = "day_night"              # "all", "season", "day_night", "season_day_night"
 SEASON_NAME = "Spring"         # used for "season" and "season_day_night"
 DAY_NIGHT_NAME = "day"         # used for "day_night" and "season_day_night"
 
@@ -36,7 +36,7 @@ SECTORS = ["C10"]
 
 # options
 WEIGHTED = True
-LABEL_STATIONS = True
+LABEL_STATIONS = False
 FIGSIZE = (12, 6)
 MAP_EXTENT = None
 # Example:
@@ -363,7 +363,7 @@ def plot_station_map(df_summary, metric_col, title, cbar_label, outfile=None,vma
             df_summary["lat"],
             c=df_summary[metric_col],
             cmap="inferno",
-            s=70,
+            s=100,
             edgecolor="k",vmax=vmax,vmin=vmin,
             transform=ccrs.PlateCarree(),
         )
@@ -385,7 +385,7 @@ def plot_station_map(df_summary, metric_col, title, cbar_label, outfile=None,vma
             df_summary["lat"],
             c=df_summary[metric_col],
             cmap="inferno",
-            s=70,
+            s=100,
             edgecolor="k",
             vmax=vmax,vmin=vmin
         )
