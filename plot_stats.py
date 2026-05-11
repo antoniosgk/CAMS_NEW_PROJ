@@ -7,32 +7,34 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_hex
+import datetime as dt
+import time
 #%%
 # ============================================================
 # ============================================================
 # USER INPUTS
 # ============================================================
-RUN_MODE = "one"          # "one", "multi", "both"
+RUN_MODE = "multi"          # "one", "multi", "both"
 species = "O3"
 mode = "A"
 units = "ppb"
 
-station = "1001A"
-stations = ["1006A","2629A"]
+station = "1002A"
+stations = ["1001A","1002A","1003A","1004A","1005A"]
 
 SECTOR_TYPE = "CUM"
 CENTER_COL = "center_ppb"
 CV_COL = "cv_w"
 SECTOR_COL = "sector"
 AGGREGATE_CV_OVER_SECTORS = False
-CV_SECTOR="C1"
+CV_SECTOR="C10"
 MERGE_SEASONAL_YEARS = True
-SP_LIM=(20,100)
-CV_LIM=(0,20)
+SP_LIM=None
+CV_LIM=None
 RATIO_LIM=(0.7,1.3)
 
-PARQUET_CSV_DIR="/home/agkiokas/CAMS/stations_csv_parquet/"
-PLOTS_DIR = "/home/agkiokas/CAMS/plots"
+PARQUET_CSV_DIR="/mnt/store01/agkiokas/CAMS/stations_parquet/"
+PLOTS_DIR = "/mnt/store01/agkiokas/CAMS/stations_parquet/"
 STATIONS_PATH = "/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt"
 out_dir_one = f"{PLOTS_DIR}/full_analysis_one_station"
 out_dir_multi = f"{PLOTS_DIR}/full_analysis_multi_station"
@@ -1324,7 +1326,7 @@ def plot_center_vs_cv_scatter(
     fig, ax = plt.subplots(figsize=figsize)
     if "station" in pairs.columns:
         for st, g in pairs.groupby("station"):
-            ax.scatter(g["center_ppb"], g["cv_w"]*100.0, alpha=0.6, label=st)
+            ax.scatter(g["center_ppb"], g["cv_w"]*100.0, alpha=0.6, label=None)
         ax.legend(fontsize=8)
     else:
         ax.scatter(pairs["center_ppb"], pairs["cv_w"]*100.0, alpha=0.6)
@@ -1368,7 +1370,7 @@ def plot_center_vs_cv_scatter_by_season(
         if not sub.empty:
             if "station" in sub.columns:
                 for st, g in sub.groupby("station"):
-                    ax.scatter(g["center_ppb"], g["cv_w"]*100.0, alpha=0.6, label=st)
+                    ax.scatter(g["center_ppb"], g["cv_w"]*100.0, alpha=0.6, label=None)
             else:
                 ax.scatter(sub["center_ppb"], sub["cv_w"]*100.0, alpha=0.6)
 
@@ -1467,10 +1469,10 @@ def plot_altitude_relations(
         ax1.text(r["Altitude"], r["center_mean"], str(r["station"]), fontsize=8)
     r1 = safe_corr(tbl["Altitude"], tbl["center_mean"])
     ax1.set_xlabel("Altitude (m)")
-    ax1.set_ylabel("Mean center_ppb")
+    ax1.set_ylabel("Mean ozone mixing ratio (ppb)")
     ax1.set_ylim(sp_lim)
     ax1.set_title(
-        f"Mean center_ppb vs Altitude | r={r1:.3f}"
+        f"Mean ozone mixing ratio vs Altitude | r={r1:.3f}"
         if pd.notna(r1) else "Mean center_ppb vs Altitude"
     )
     ax1.grid(True, alpha=0.3)
@@ -1508,7 +1510,7 @@ def plot_altitude_relations(
     fig3, ax3 = plt.subplots(figsize=figsize)
     ax3.scatter(tbl["Altitude"], tbl["center_std"], alpha=0.8)
     for _, r in tbl.iterrows():
-        ax3.text(r["Altitude"], r["center_std"], str(r["station"]), fontsize=8)
+        ax3.text(r["Altitude"], r["center_std"], str(r["station"]), fontsize=1)
     r3 = safe_corr(tbl["Altitude"], tbl["center_std"])
     ax3.set_xlabel("Altitude (m)")
     ax3.set_xlim(sp_lim)
@@ -2059,7 +2061,7 @@ def run_full_multi_station_analysis(
     sp_lim=None,cv_lim=None,cv_sector=None,sector_col="sector"
 ):
     os.makedirs(out_dir, exist_ok=True)
-
+    """
     plot_center_timeseries_full_period(
         df=df,
         stations=stations,
@@ -2125,7 +2127,8 @@ def run_full_multi_station_analysis(
         cv_sector=cv_sector,sector_col=sector_col,
     out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_box_{cv_col}.png")
 )
-'''
+"""
+
     pairs, corr_all, _, _ = plot_center_vs_cv_scatter(
         df=df,
         stations=stations,
@@ -2152,6 +2155,7 @@ def run_full_multi_station_analysis(
         aggregate_cv_over_sectors=aggregate_cv_over_sectors,cv_lim=CV_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_scatter_{center_col}_vs_{cv_col}_by_month.png")
     )
+    '''
     plot_multi_station_diurnal_cycle(
     df=df_all,
     stations=stations,
@@ -2162,6 +2166,7 @@ def run_full_multi_station_analysis(
     out_path=f"{out_dir_multi}/multi_station_{species}_diurnal_mean.png",
     sp_lim=SP_LIM
      )
+     '''
     monthly_stats = monthly_stats_table(
         df[df["station"].isin(stations)],
         value_cols=[center_col, cv_col]
@@ -2221,12 +2226,16 @@ def run_full_multi_station_analysis(
         "altitude_corrs": alt_corrs,
         "pairs": pairs,
     }
-'''
+
 
 # ============================================================
 # FINAL EXECUTION BLOCK
 # ============================================================
 if __name__ == "__main__":
+    start = time.time()
+    print("\n===== PRODUCTION RUN =====")
+    print("Start:", dt.datetime.fromtimestamp(start).strftime("%Y-%m-%d %H:%M:%S"))
+
     stations_df = load_stations_file(STATIONS_PATH)
 
     if RUN_MODE in ["one", "both"]:
@@ -2287,5 +2296,8 @@ if __name__ == "__main__":
             cv_col=CV_COL,
             aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS,sector_col=SECTOR_COL,
             merge_years=MERGE_SEASONAL_YEARS,sp_lim=SP_LIM,cv_lim=CV_LIM)
+        end = time.time()
+        print("End:", dt.datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"))
+        print(f"Execution time: {(end - start) / 60:.2f} minutes")
         
 # %%

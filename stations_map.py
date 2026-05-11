@@ -3,7 +3,7 @@ import pandas as pd
 import folium
 from folium.plugins import MarkerCluster
 #%%
-name_st=["2641A"]
+name_st=["1001A","1002A"]
 
 def load_stations(stations_path):
     """Load station table. Keeps all rows; marks invalid rows (NaNs) for later filtering."""

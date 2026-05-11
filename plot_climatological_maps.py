@@ -14,7 +14,7 @@ import xarray as xr
 # ============================================================
 #STATION_LIST = None
 # Example:
-STATION_LIST = ["1001A", "1003A","1004A","1005A","1006A","1007A"]
+STATION_LIST = ["1001A","1003A","1004A","1005A","1006A","1007A"]
 MAP_EXTENT = None   # [lon_min, lon_max, lat_min, lat_max] or None
 PARQUET_DIR = Path("/mnt/store01/agkiokas/CAMS/stations_parquet/")
 NC_DIR = Path("/mnt/store01/agkiokas/CAMS/inst/subsets/O3/")
@@ -29,10 +29,10 @@ CLIM_GROUPS = [
     ("all", None, None),
     ("day", "day", None),
     ("night", "night", None),
-    ("Winter", None, "Winter"),
-    ("Spring", None, "Spring"),
-    ("Summer", None, "Summer"),
-    ("Autumn", None, "Autumn"),
+    ("DJF", None, "DJF"),
+    ("MAM", None, "MAM"),
+    ("JJA", None, "JJA"),
+    ("SON", None, "SON"),
 ]
 
 # Approaches 3 and 5 controls
@@ -48,7 +48,7 @@ A4_USE_RADIUS_FROM_PARQUET = True     # radius for chosen sector is taken from p
 
 # Plot settings
 FIGSIZE = (10, 6)
-LABEL_STATIONS = True
+LABEL_STATIONS = False
 
 
 # ============================================================
@@ -233,7 +233,7 @@ def plot_station_map(
         df_summary["lat"],
         c=df_summary[metric_col],
         cmap=cmap,
-        s=70,
+        s=100,
         edgecolor="k",
         vmin=vmin,
         vmax=vmax,
@@ -257,7 +257,7 @@ def plot_station_map(
         df_summary["lat"],
         c=df_summary[metric_col],
         cmap=cmap,
-        s=70,
+        s=100,
         edgecolor="k",
         vmin=vmin,
         vmax=vmax,
@@ -605,41 +605,65 @@ def main():
 
     approach_settings = {
         "center_mean_time_ppb": {
-            "title": "Approach 1: Temporal mean of center_ppb",
+            "title": "Temporal mean of central pixel of ozone (ppb)",
             "cbar": "ppb",
             "cmap": "viridis",
             "outfile_prefix": "map_approach1_center_mean",
         },
         "center_temporal_cv_pct": {
-            "title": "Approach 2: Temporal CV of center_ppb",
+            "title": "Temporal CV of central pixel",
             "cbar": "CV (%)",
             "cmap": "magma",
             "outfile_prefix": "map_approach2_center_temporal_cv",
         },
         "approach3_ratio_pct": {
-            "title": f"Approach 3: mean(std_w)/mean(mean_w) | sector_type={A35_SECTOR_TYPE}, sector={A35_SECTOR}",
+            "title": f"Temporal Mean(std)/Temporal mean(mean_w) | sector={A35_SECTOR}",
             "cbar": "Ratio (%)",
             "cmap": "plasma",
             "outfile_prefix": "map_approach3_ratio",
         },
         "approach5_mean_cvw_pct": {
-            "title": f"Approach 5: Time-mean weighted CV | sector_type={A35_SECTOR_TYPE}, sector={A35_SECTOR}",
+            "title": f"Time-mean weighted CV | sector={A35_SECTOR}",
             "cbar": "CV (%)",
             "cmap": "inferno",
             "outfile_prefix": "map_approach5_mean_cvw",
         },
     }
 
+    DAY_NIGHT_GROUPS = ["day", "night"]
+    SEASON_GROUPS = ["DJF", "MAM", "JJA", "SON"]
+
     for metric_col, cfg in approach_settings.items():
-        vmin, vmax = metric_limits_across_groups(group_summaries, metric_col)
 
-        print(f"\nCommon colorbar for {metric_col}: vmin={vmin:.3f}, vmax={vmax:.3f}")
+        group_sets = {
+        "all": ["all"],
+        "day_night": DAY_NIGHT_GROUPS,
+        "seasons": SEASON_GROUPS,
+        }
 
-        for group_name, summary in group_summaries.items():
-            if metric_col not in summary.columns:
+        for set_name, selected_groups in group_sets.items():
+
+            selected_summaries = {
+            g: group_summaries[g]
+            for g in selected_groups
+            if g in group_summaries
+            }
+
+            if not selected_summaries:
                 continue
 
-            plot_station_map(
+            vmin, vmax = metric_limits_across_groups(selected_summaries, metric_col)
+
+            print(
+            f"\nCommon colorbar for {metric_col} / {set_name}: "
+            f"vmin={vmin:.3f}, vmax={vmax:.3f}"
+        )
+
+            for group_name, summary in selected_summaries.items():
+                if metric_col not in summary.columns:
+                    continue
+
+                plot_station_map(
                 summary,
                 metric_col=metric_col,
                 title=f"{cfg['title']} | {group_name}",
