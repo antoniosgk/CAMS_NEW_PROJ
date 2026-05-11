@@ -14,7 +14,7 @@ import time
 # ============================================================
 # USER INPUTS
 # ============================================================
-RUN_MODE = "multi"          # "one", "multi", "both"
+RUN_MODE = "multi"          # "one", "multi", "both","all"
 species = "O3"
 mode = "A"
 units = "ppb"
@@ -32,6 +32,7 @@ MERGE_SEASONAL_YEARS = True
 SP_LIM=None
 CV_LIM=None
 RATIO_LIM=(0.7,1.3)
+SCATTER_COLOR = "tab:blue"
 
 PARQUET_CSV_DIR="/mnt/store01/agkiokas/CAMS/stations_parquet/"
 PLOTS_DIR = "/mnt/store01/agkiokas/CAMS/stations_parquet/"
@@ -168,7 +169,35 @@ def load_many_station_csvs(
 
     return pd.concat(all_dfs, ignore_index=True)
 
+def discover_station_names(
+    input_dir: str,
+    species: str,
+    mode: str,
+    pattern_csv: str = f"*_{'{species}'}_{'{mode}'}_30min.csv",
+    pattern_parquet: str = f"*_{'{species}'}_{'{mode}'}_30min.parquet"
+):
+    input_dir = Path(input_dir)
 
+    files = list(input_dir.glob(pattern_csv.format(species=species, mode=mode)))
+    files += list(input_dir.glob(pattern_parquet.format(species=species, mode=mode)))
+
+    stations = sorted({
+        p.name.split(f"_{species}_{mode}_30min")[0]
+        for p in files
+    })
+
+    if not stations:
+        raise ValueError(
+            f"No station files found in {input_dir} for species={species}, mode={mode}"
+        )
+
+    return stations
+
+
+def resolve_stations(stations, input_dir, species, mode):
+    if isinstance(stations, str) and stations.lower() == "all":
+        return discover_station_names(input_dir, species, mode)
+    return stations
 # ============================================================
 # 3. TIME FEATURES
 # ============================================================
@@ -1311,7 +1340,8 @@ def plot_seasonal_boxplot_by_station(
 def plot_center_vs_cv_scatter(
     df, stations=None, mode=None, sector_type=None,
     aggregate_cv_over_sectors=True,
-    out_path=None, figsize=(8, 6),sp_lim=None,cv_lim=None
+    out_path=None, figsize=(8, 6), sp_lim=None, cv_lim=None,
+    scatter_color="tab:blue"
 ):
     pairs = prepare_center_cv_pairs(
         df=df,
@@ -1324,18 +1354,23 @@ def plot_center_vs_cv_scatter(
     corr = safe_corr(pairs["center_ppb"], pairs["cv_w"], method="pearson")
 
     fig, ax = plt.subplots(figsize=figsize)
-    if "station" in pairs.columns:
-        for st, g in pairs.groupby("station"):
-            ax.scatter(g["center_ppb"], g["cv_w"]*100.0, alpha=0.6, label=None)
-        ax.legend(fontsize=8)
-    else:
-        ax.scatter(pairs["center_ppb"], pairs["cv_w"]*100.0, alpha=0.6)
+
+    ax.scatter(
+        pairs["center_ppb"],
+        pairs["cv_w"] * 100.0,
+        alpha=0.6,
+        color=scatter_color
+    )
 
     ax.set_xlabel("O3 (ppb)")
     ax.set_xlim(sp_lim)
     ax.set_ylabel("Coefficient of variation (%)")
     ax.set_ylim(cv_lim)
-    ax.set_title(f"Scatter: O3 (central cell) vs CV | Pearson r={corr:.3f}" if pd.notna(corr) else "Scatter: center_ppb vs cv_w")
+    ax.set_title(
+        f"Scatter: O3 central cell vs CV | Pearson r={corr:.3f}"
+        if pd.notna(corr)
+        else "Scatter: O3 central cell vs CV"
+    )
     ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
@@ -1343,13 +1378,15 @@ def plot_center_vs_cv_scatter(
         ensure_dir(out_path)
         fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.show()
+
     return pairs, corr, fig, ax
 
 
 def plot_center_vs_cv_scatter_by_season(
     df, stations=None, mode=None, sector_type=None,
     aggregate_cv_over_sectors=True,
-    out_path=None, figsize=(14, 10),sp_lim=None,cv_lim=None
+    out_path=None, figsize=(14, 10), sp_lim=None, cv_lim=None,
+    scatter_color="tab:blue"
 ):
     pairs = prepare_center_cv_pairs(
         df=df,
@@ -1368,36 +1405,40 @@ def plot_center_vs_cv_scatter_by_season(
         corr = safe_corr(sub["center_ppb"], sub["cv_w"])
 
         if not sub.empty:
-            if "station" in sub.columns:
-                for st, g in sub.groupby("station"):
-                    ax.scatter(g["center_ppb"], g["cv_w"]*100.0, alpha=0.6, label=None)
-            else:
-                ax.scatter(sub["center_ppb"], sub["cv_w"]*100.0, alpha=0.6)
+            ax.scatter(
+                sub["center_ppb"],
+                sub["cv_w"] * 100.0,
+                alpha=0.6,
+                color=scatter_color
+            )
 
-        ax.set_title(f"{season} | r={corr:.3f}" if pd.notna(corr) else f"{season} | r=nan")
+        ax.set_title(
+            f"{season} | r={corr:.3f}"
+            if pd.notna(corr)
+            else f"{season} | r=nan"
+        )
         ax.set_xlabel("O3 central cell (ppb)")
         ax.set_xlim(sp_lim)
         ax.set_ylabel("Coefficient of Variation (%)")
         ax.set_ylim(cv_lim)
         ax.grid(True, alpha=0.3)
 
-    handles, labels = axes[0].get_legend_handles_labels()
-    if labels:
-        fig.legend(handles, labels, loc="upper right")
-
-    fig.suptitle("O3(central cell) vs CV by season", y=1.02)
+    fig.suptitle("O3 central cell vs CV by season", y=1.02)
     fig.tight_layout()
+
     if out_path:
         ensure_dir(out_path)
         fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.show()
+
     return pairs, fig, axes
 
 
 def plot_center_vs_cv_scatter_by_month(
     df, stations=None, mode=None, sector_type=None,
     aggregate_cv_over_sectors=True,
-    out_path=None, figsize=(18, 12),sp_lim=None,cv_lim=None
+    out_path=None, figsize=(18, 12), sp_lim=None, cv_lim=None,
+    scatter_color="tab:blue"
 ):
     pairs = prepare_center_cv_pairs(
         df=df,
@@ -1416,31 +1457,33 @@ def plot_center_vs_cv_scatter_by_month(
         corr = safe_corr(sub["center_ppb"], sub["cv_w"])
 
         if not sub.empty:
-            if "station" in sub.columns:
-                for st, g in sub.groupby("station"):
-                    ax.scatter(g["center_ppb"], g["cv_w"]*100.0, alpha=0.6, label=st)
-            else:
-                ax.scatter(sub["center_ppb"], sub["cv_w"]*100.0, alpha=0.6)
+            ax.scatter(
+                sub["center_ppb"],
+                sub["cv_w"] * 100.0,
+                alpha=0.6,
+                color=scatter_color
+            )
 
-        ax.set_title(f"{calendar.month_abbr[m]} | r={corr:.3f}" if pd.notna(corr) else f"{calendar.month_abbr[m]} | r=nan")
+        ax.set_title(
+            f"{calendar.month_abbr[m]} | r={corr:.3f}"
+            if pd.notna(corr)
+            else f"{calendar.month_abbr[m]} | r=nan"
+        )
         ax.set_xlabel("O3 (ppb)")
         ax.set_xlim(sp_lim)
         ax.set_ylabel("Coefficient of Variation (%)")
         ax.set_ylim(cv_lim)
         ax.grid(True, alpha=0.3)
 
-    handles, labels = axes[0].get_legend_handles_labels()
-    if labels:
-        fig.legend(handles, labels, loc="upper right")
-
-    fig.suptitle("O3 (central cell) vs CV by month", y=1.02)
+    fig.suptitle("O3 central cell vs CV by month", y=1.02)
     fig.tight_layout()
+
     if out_path:
         ensure_dir(out_path)
         fig.savefig(out_path, dpi=200, bbox_inches="tight")
     plt.show()
-    return pairs, fig, axes
 
+    return pairs, fig, axes
 
 # ============================================================
 # ============================================================
@@ -1465,8 +1508,8 @@ def plot_altitude_relations(
     # center_mean vs altitude
     fig1, ax1 = plt.subplots(figsize=figsize)
     ax1.scatter(tbl["Altitude"], tbl["center_mean"], alpha=0.8)
-    for _, r in tbl.iterrows():
-        ax1.text(r["Altitude"], r["center_mean"], str(r["station"]), fontsize=8)
+    #for _, r in tbl.iterrows():
+        #ax1.text(r["Altitude"], r["center_mean"], str(r["station"]), fontsize=8)
     r1 = safe_corr(tbl["Altitude"], tbl["center_mean"])
     ax1.set_xlabel("Altitude (m)")
     ax1.set_ylabel("Mean ozone mixing ratio (ppb)")
@@ -1487,8 +1530,8 @@ def plot_altitude_relations(
     # cv_w_mean vs altitude
     fig2, ax2 = plt.subplots(figsize=figsize)
     ax2.scatter(tbl["Altitude"], tbl["cv_w_mean"]*100, alpha=0.8)
-    for _, r in tbl.iterrows():
-        ax2.text(r["Altitude"], r["cv_w_mean"], str(r["station"]), fontsize=8)
+    #for _, r in tbl.iterrows():
+        #ax2.text(r["Altitude"], r["cv_w_mean"], str(r["station"]), fontsize=8)
     r2 = safe_corr(tbl["Altitude"], tbl["cv_w_mean"])
     ax2.set_xlabel("Altitude (m)")
     ax2.set_ylabel("Mean CV(%)")
@@ -1509,8 +1552,8 @@ def plot_altitude_relations(
     # variability of center_ppb vs altitude
     fig3, ax3 = plt.subplots(figsize=figsize)
     ax3.scatter(tbl["Altitude"], tbl["center_std"], alpha=0.8)
-    for _, r in tbl.iterrows():
-        ax3.text(r["Altitude"], r["center_std"], str(r["station"]), fontsize=1)
+    #for _, r in tbl.iterrows():
+        #ax3.text(r["Altitude"], r["center_std"], str(r["station"]), fontsize=1)
     r3 = safe_corr(tbl["Altitude"], tbl["center_std"])
     ax3.set_xlabel("Altitude (m)")
     ax3.set_xlim(sp_lim)
@@ -1862,7 +1905,7 @@ def run_full_station_analysis(
     mode=mode,
     species=species,
     out_path=f"{out_dir_one}/{station}_{species}_full_period_cvw_by_sector.png",
-    cv_lim=CV_LIM
+    cv_lim=CV_LIM,scatter_color="tab:blue"
 )
     plot_one_station_seasonal_boxplot_ratio_meanw_to_center(
         df=df,
@@ -2057,7 +2100,7 @@ def run_full_multi_station_analysis(
     out_dir=".",
     center_col="center_ppb",
     cv_col="cv_w",
-    aggregate_cv_over_sectors=True,merge_years=False,
+    aggregate_cv_over_sectors=True,merge_years=False,scatter_color="tab:blue",
     sp_lim=None,cv_lim=None,cv_sector=None,sector_col="sector"
 ):
     os.makedirs(out_dir, exist_ok=True)
@@ -2134,7 +2177,7 @@ def run_full_multi_station_analysis(
         stations=stations,
         mode=mode,
         sector_type=sector_type,
-        aggregate_cv_over_sectors=aggregate_cv_over_sectors,cv_lim=CV_LIM,
+        aggregate_cv_over_sectors=aggregate_cv_over_sectors,cv_lim=CV_LIM,scatter_color=scatter_color,
         out_path=os.path.join(out_dir, f"multi_station_{species}_scatter_{center_col}_vs_{cv_col}.png")
     )
 
@@ -2143,7 +2186,7 @@ def run_full_multi_station_analysis(
         stations=stations,
         mode=mode,
         sector_type=sector_type,
-        aggregate_cv_over_sectors=aggregate_cv_over_sectors,cv_lim=CV_LIM,
+        aggregate_cv_over_sectors=aggregate_cv_over_sectors,cv_lim=CV_LIM,scatter_color=scatter_color,
         out_path=os.path.join(out_dir, f"multi_station_{species}_scatter_{center_col}_vs_{cv_col}_by_season.png")
     )
 
@@ -2152,7 +2195,7 @@ def run_full_multi_station_analysis(
         stations=stations,
         mode=mode,
         sector_type=sector_type,
-        aggregate_cv_over_sectors=aggregate_cv_over_sectors,cv_lim=CV_LIM,
+        aggregate_cv_over_sectors=aggregate_cv_over_sectors,cv_lim=CV_LIM,scatter_color=scatter_color,
         out_path=os.path.join(out_dir, f"multi_station_{species}_scatter_{center_col}_vs_{cv_col}_by_month.png")
     )
     '''
@@ -2275,29 +2318,45 @@ if __name__ == "__main__":
         )
 
     if RUN_MODE in ["multi", "both"]:
+        stations_resolved = resolve_stations(
+        stations=stations,
+        input_dir=PLOTS_DIR,
+        species=species,
+        mode=mode
+    )
+
+        print(f"Stations selected: {stations_resolved}")
+
         df_all = load_many_station_csvs(
-            input_dir=PLOTS_DIR,
-            species=species,
-            mode=mode,
-            station_names=stations
-        )
+        input_dir=PLOTS_DIR,
+        species=species,
+        mode=mode,
+        station_names=stations_resolved
+    )
+
         df_all = attach_station_metadata(df_all, stations_df)
 
         res_multi = run_full_multi_station_analysis(
-            df=df_all,
-            stations=stations,
-            stations_df=stations_df,
-            species=species,
-            units=units,
-            mode=mode,
-            sector_type=SECTOR_TYPE,
-            out_dir=out_dir_multi,
-            center_col=CENTER_COL,
-            cv_col=CV_COL,
-            aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS,sector_col=SECTOR_COL,
-            merge_years=MERGE_SEASONAL_YEARS,sp_lim=SP_LIM,cv_lim=CV_LIM)
-        end = time.time()
-        print("End:", dt.datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"))
-        print(f"Execution time: {(end - start) / 60:.2f} minutes")
+        df=df_all,
+        stations=stations_resolved,
+        stations_df=stations_df,
+        species=species,
+        units=units,
+        mode=mode,
+        sector_type=SECTOR_TYPE,
+        out_dir=out_dir_multi,
+        center_col=CENTER_COL,
+        cv_col=CV_COL,
+        aggregate_cv_over_sectors=AGGREGATE_CV_OVER_SECTORS,
+        sector_col=SECTOR_COL,
+        merge_years=MERGE_SEASONAL_YEARS,
+        sp_lim=SP_LIM,
+        cv_lim=CV_LIM,
+        cv_sector=CV_SECTOR,
+        scatter_color=SCATTER_COLOR
+    )
+    end = time.time()
+    print("End:", dt.datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"))
+    print(f"Execution time: {(end - start) / 60:.2f} minutes")
         
 # %%
