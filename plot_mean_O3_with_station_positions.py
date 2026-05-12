@@ -27,7 +27,7 @@ LEVEL_TO_PLOT = 72          # last level
 PLOT_O3 = True
 PLOT_STATIONS = True
 
-HIGHLIGHT_STATIONS = ["1001A", "1002A"]   # [] for none
+HIGHLIGHT_STATIONS = []   # [] for none
 
 STATION_NAME_COL = "Station_Name"
 STATION_LAT_COL = "Latitude"
@@ -169,7 +169,7 @@ def plot_map():
 
         cbar = plt.colorbar(mesh, ax=ax, shrink=0.8, pad=0.03)
         units = da.attrs.get("units", "")
-        cbar.set_label(f"{VAR_NAME} temporal mean ({units})")
+        cbar.set_label(f"ozone temporal mean ({units})")
 
     # --------------------------------------------------------
     # Station markers
@@ -180,7 +180,7 @@ def plot_map():
             stations[STATION_LON_COL],
             stations[STATION_LAT_COL],
             s=MARKER_SIZE,
-            facecolor="white",
+            facecolor="black",
             edgecolor="black",
             linewidth=0.7,
             marker="o",
@@ -225,8 +225,8 @@ def plot_map():
     if PLOT_STATIONS or HIGHLIGHT_STATIONS:
         ax.legend(loc="lower left")
 
-    ax.set_title(f"{VAR_NAME} temporal mean - level {LEVEL_TO_PLOT}")
-
+    ax.set_title(f"Ozone temporal mean - ground level")
+    #ax.set_title('Stations positions')
     plt.tight_layout()
     plt.savefig(OUT_FILE, dpi=300, bbox_inches="tight")
     plt.show()

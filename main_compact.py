@@ -38,9 +38,9 @@ END_DT   = dt.datetime(2007, 6, 16, 0, 0)
 
 MODE = "A"                   # only "A" implemented in this compact script
 
-STATION_SELECTION = "list"    # "single", "list", "all"
-STATION_IDX = 14
-STATION_IDXS = [i for i in range(1900, 2027)]
+STATION_SELECTION = "single"    # "single", "list", "all"
+STATION_IDX = 80
+STATION_IDXS = [i for i in range(538, 550)]
 
 STEP_MINUTES = 30
 CELL_NUMS = 10

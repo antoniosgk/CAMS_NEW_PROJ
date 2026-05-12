@@ -12,9 +12,9 @@ import xarray as xr
 # ============================================================
 # USER SETTINGS
 # ============================================================
-#STATION_LIST = None
+STATION_LIST = None
 # Example:
-STATION_LIST = ["1001A","1003A","1004A","1005A","1006A","1007A"]
+#STATION_LIST = ["1001A","1003A","1004A","1005A","1006A","1007A"]
 MAP_EXTENT = None   # [lon_min, lon_max, lat_min, lat_max] or None
 PARQUET_DIR = Path("/mnt/store01/agkiokas/CAMS/stations_parquet/")
 NC_DIR = Path("/mnt/store01/agkiokas/CAMS/inst/subsets/O3/")
@@ -42,7 +42,7 @@ A35_AGGREGATE_OVER_SECTORS = False    # True => average over sectors per timesta
 
 # Approach 4 controls
 A4_SECTOR_TYPE = "CUM"
-A4_SECTOR = "C1"
+A4_SECTOR = "C10"
 A4_WEIGHTED = True                    # weight by cos(lat)
 A4_USE_RADIUS_FROM_PARQUET = True     # radius for chosen sector is taken from parquet
 

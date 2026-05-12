@@ -496,7 +496,13 @@ def plot_for_sector(ds, station_info, sector):
         sector=sector,
         level_col="lev_all",
     )
+    csv_all = station_info.copy()
+    csv_all["cv_pct_all"] = vals_all
 
+    csv_all.to_csv(
+    OUT_DIR / f"station_cv_all_{sector}.csv",
+    index=False,
+    )
     plot_station_map(
         station_info,
         vals_all,
@@ -522,6 +528,14 @@ def plot_for_sector(ds, station_info, sector):
         )
 
         daynight_values[dn] = vals
+        csv_dn = station_info.copy()
+        csv_dn["day_night"] = dn
+        csv_dn["cv_pct"] = vals
+
+        csv_dn.to_csv(
+        OUT_DIR / f"station_cv_{dn}_{sector}.csv",
+        index=False,
+    )
 
     if USE_SAME_COLORBAR_DAYNIGHT:
         all_vals = np.concatenate(list(daynight_values.values()))
@@ -559,7 +573,14 @@ def plot_for_sector(ds, station_info, sector):
         )
 
         season_values[season] = vals
+        csv_season = station_info.copy()
+        csv_season["season"] = season
+        csv_season["cv_pct"] = vals
 
+        csv_season.to_csv(
+        OUT_DIR / f"station_cv_{season}_{sector}.csv",
+        index=False,
+        )
     if USE_SAME_COLORBAR_SEASONS:
         all_vals = np.concatenate(list(season_values.values()))
         season_vmin = np.nanmin(all_vals)

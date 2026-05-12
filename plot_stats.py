@@ -14,14 +14,14 @@ import time
 # ============================================================
 # USER INPUTS
 # ============================================================
-RUN_MODE = "multi"          # "one", "multi", "both","all"
+RUN_MODE = "multi"          # "one", "multi", "both"
 species = "O3"
 mode = "A"
 units = "ppb"
 
 station = "1002A"
-stations = ["1001A","1002A","1003A","1004A","1005A"]
-
+#stations = ["1001A","1002A","1003A","1004A","1005A"]
+stations="all"
 SECTOR_TYPE = "CUM"
 CENTER_COL = "center_ppb"
 CV_COL = "cv_w"
@@ -2317,7 +2317,7 @@ if __name__ == "__main__":
              merge_years=MERGE_SEASONAL_YEARS,sp_lim=SP_LIM,cv_lim=CV_LIM, cv_sector=CV_SECTOR
         )
 
-    if RUN_MODE in ["multi", "both"]:
+    if RUN_MODE in ["multi", "both","all"]:
         stations_resolved = resolve_stations(
         stations=stations,
         input_dir=PLOTS_DIR,
