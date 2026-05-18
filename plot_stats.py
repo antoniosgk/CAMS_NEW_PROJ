@@ -14,14 +14,18 @@ import time
 # ============================================================
 # USER INPUTS
 # ============================================================
-RUN_MODE = "multi"          # "one", "multi", "both"
+RUN_MODE = "one"          # "one", "multi", "both"
 species = "O3"
 mode = "A"
 units = "ppb"
 
+TIME_PERIOD_MODE = "custom"     # "all" or "custom"
+START_DATE = "2005-06-09"    # used only if TIME_PERIOD_MODE = "custom"
+END_DATE = "2005-06-16"      # used only if TIME_PERIOD_MODE = "custom"
+
 station = "1002A"
-#stations = ["1001A","1002A","1003A","1004A","1005A"]
-stations="all"
+stations = ["1001A","1002A","1003A","1004A","1005A"]
+#stations="all"
 SECTOR_TYPE = "CUM"
 CENTER_COL = "center_ppb"
 CV_COL = "cv_w"
@@ -226,6 +230,25 @@ def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
     out["hour"] = out["timestamp"].dt.hour
     out["minute"] = out["timestamp"].dt.minute
     return out
+def filter_time_period(df, time_period_mode="all", start_date=None, end_date=None):
+    out = df.copy()
+    out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
+    out = out.dropna(subset=["timestamp"]).copy()
+
+    if time_period_mode == "all":
+        return out
+
+    if time_period_mode == "custom":
+        if start_date is not None:
+            out = out[out["timestamp"] >= pd.to_datetime(start_date)]
+
+        if end_date is not None:
+            out = out[out["timestamp"] <= pd.to_datetime(end_date)]
+
+        return out
+
+    raise ValueError("TIME_PERIOD_MODE must be either 'all' or 'custom'")
+
 def format_season_time_axis(ax, season, merge_years=False, axis_info=None):
     if merge_years:
         if axis_info is not None and axis_info["tick_positions"] is not None:
@@ -1905,7 +1928,7 @@ def run_full_station_analysis(
     mode=mode,
     species=species,
     out_path=f"{out_dir_one}/{station}_{species}_full_period_cvw_by_sector.png",
-    cv_lim=CV_LIM,scatter_color="tab:blue"
+    cv_lim=CV_LIM
 )
     plot_one_station_seasonal_boxplot_ratio_meanw_to_center(
         df=df,
@@ -1987,7 +2010,7 @@ def run_full_station_analysis(
         sector_col=sector_col,
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_box_{cv_col}.png")
     )
-    '''
+    
     plot_one_station_diurnal_cycle(
     df=df_one,
     station=station,
@@ -2018,7 +2041,7 @@ def run_full_station_analysis(
     out_path=f"{out_dir_one}/{station}_{species}_diurnal_boxplot.png",
     sp_lim=SP_LIM
 )
-    '''
+    
     pairs, corr_all, _, _ = plot_center_vs_cv_scatter(
         df=df,
         stations=station,
@@ -2104,7 +2127,7 @@ def run_full_multi_station_analysis(
     sp_lim=None,cv_lim=None,cv_sector=None,sector_col="sector"
 ):
     os.makedirs(out_dir, exist_ok=True)
-    """
+    
     plot_center_timeseries_full_period(
         df=df,
         stations=stations,
@@ -2126,7 +2149,7 @@ def run_full_multi_station_analysis(
         units=units,merge_years=merge_years,sp_lim=SP_LIM,
         out_path=os.path.join(out_dir, f"multi_station_{species}_seasonal_center.png")
     )
-
+    """
     plot_monthly_boxplot_by_station(
     df=df,
     value_col=center_col,
@@ -2300,7 +2323,12 @@ if __name__ == "__main__":
             station_name=station
         )
         df_one = attach_station_metadata(df_one, stations_df)
-
+        df_one = filter_time_period(
+        df_one,
+        time_period_mode=TIME_PERIOD_MODE,
+        start_date=START_DATE,
+        end_date=END_DATE
+        )
         res_one = run_full_station_analysis(
             df=df_one,
             station=station,
@@ -2335,7 +2363,12 @@ if __name__ == "__main__":
     )
 
         df_all = attach_station_metadata(df_all, stations_df)
-
+        df_all = filter_time_period(
+        df_all,
+        time_period_mode=TIME_PERIOD_MODE,
+        start_date=START_DATE,
+        end_date=END_DATE
+    )
         res_multi = run_full_multi_station_analysis(
         df=df_all,
         stations=stations_resolved,

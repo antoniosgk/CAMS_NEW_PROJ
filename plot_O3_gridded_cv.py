@@ -23,7 +23,7 @@ OUT_DIR = Path("/mnt/store01/agkiokas/CAMS/O3_station_cv_plots")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SECTOR = "C10"              # C1 ... C10
-PLOT_ALL_SECTORS = False   # True if you want plots for all C1-C10
+PLOT_ALL_SECTORS = True   # True if you want plots for all C1-C10
 
 SHOW_NAMES = False
 

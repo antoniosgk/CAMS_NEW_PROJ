@@ -7,25 +7,25 @@ import matplotlib.pyplot as plt
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-
+from matplotlib.patches import Rectangle
 
 # ============================================================
 # SETTINGS
 # ============================================================
 
-NC_FILE = Path("/mnt/store01/agkiokas/CAMS/O3_temporal_mean.nc")
+NC_FILE = Path("/mnt/store01/agkiokas/CAMS/O3_temporal_mean_std_season_daynight.nc")
 STATIONS_TXT = Path("/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt")
 
 OUT_FILE = Path("/mnt/store01/agkiokas/CAMS/O3_temporal_mean_level22_stations.png")
 
-VAR_NAME = "O3_temporal_mean"
+VAR_NAME = "O3_temporal_std" #O3_temporal_std,O3_seasonal_std
 O3_MW = 48.0
 AIR_MW = 28.9647
 
 CONVERT_KGKG_TO_PPB = True
 LEVEL_TO_PLOT = 72          # last level
 PLOT_O3 = True
-PLOT_STATIONS = True
+PLOT_STATIONS = False
 
 HIGHLIGHT_STATIONS = []   # [] for none
 
@@ -40,7 +40,12 @@ HIGHLIGHT_SIZE = 90
 
 MAP_PADDING_DEG = 0
 
+DRAW_SECTOR_BOX = False
+BOX_STATION = "1002A"      # station around which to draw the box
+BOX_SECTOR = "C10"         # C1 ... C10
 
+BOX_EDGE_COLOR = "red"
+BOX_LINEWIDTH = 1.0
 # ============================================================
 # LOAD DATA
 # ============================================================
@@ -88,6 +93,35 @@ def load_stations_txt():
 # ============================================================
 # PLOT
 # ============================================================
+def get_sector_box_bounds(st_lon, st_lat, lon, lat, sector):
+    """
+    C1 = 3x3 grid cells
+    C2 = 5x5 grid cells
+    ...
+    C10 = 21x21 grid cells
+    """
+
+    sector_num = int(str(sector).replace("C", ""))
+    half_cells = sector_num
+
+    lon_1d = lon if lon.ndim == 1 else lon[0, :]
+    lat_1d = lat if lat.ndim == 1 else lat[:, 0]
+
+    i_lon = int(np.argmin(np.abs(lon_1d - st_lon)))
+    i_lat = int(np.argmin(np.abs(lat_1d - st_lat)))
+
+    i_lon_min = max(i_lon - half_cells, 0)
+    i_lon_max = min(i_lon + half_cells, len(lon_1d) - 1)
+
+    i_lat_min = max(i_lat - half_cells, 0)
+    i_lat_max = min(i_lat + half_cells, len(lat_1d) - 1)
+
+    lon_min = lon_1d[i_lon_min]
+    lon_max = lon_1d[i_lon_max]
+    lat_min = lat_1d[i_lat_min]
+    lat_max = lat_1d[i_lat_max]
+
+    return lon_min, lon_max, lat_min, lat_max
 
 def plot_map():
     ds, da = load_o3_level()
@@ -166,10 +200,10 @@ def plot_map():
                 transform=ccrs.PlateCarree(),
                 zorder=1,
             )
-
+        
         cbar = plt.colorbar(mesh, ax=ax, shrink=0.8, pad=0.03)
         units = da.attrs.get("units", "")
-        cbar.set_label(f"ozone temporal mean ({units})")
+        cbar.set_label(f"ozone temporal std ({units})")
 
     # --------------------------------------------------------
     # Station markers
@@ -188,6 +222,50 @@ def plot_map():
             zorder=5,
             label="Stations",
         )
+        '''
+        ax.set_extent(
+        [
+            105 ,
+            130 + MAP_PADDING_DEG,
+            30 - MAP_PADDING_DEG,
+            50 + MAP_PADDING_DEG,
+        ],
+        crs=ccrs.PlateCarree(),
+    )
+ '''
+        
+    if DRAW_SECTOR_BOX:
+        box_station = stations[stations[STATION_NAME_COL].astype(str) == str(BOX_STATION)]
+
+        if box_station.empty:
+            raise ValueError(f"BOX_STATION={BOX_STATION} not found in stations file.")
+
+        st_lon = float(box_station.iloc[0][STATION_LON_COL])
+        st_lat = float(box_station.iloc[0][STATION_LAT_COL])
+
+        lon_min_box, lon_max_box, lat_min_box, lat_max_box = get_sector_box_bounds(
+            st_lon=st_lon,
+            st_lat=st_lat,
+            lon=lon,
+            lat=lat,
+            sector=BOX_SECTOR
+        )
+
+        rect = Rectangle(
+            (lon_min_box, lat_min_box),
+            lon_max_box - lon_min_box,
+            lat_max_box - lat_min_box,
+            linewidth=BOX_LINEWIDTH,
+            edgecolor=BOX_EDGE_COLOR,
+            facecolor="none",
+            transform=ccrs.PlateCarree(),
+            zorder=8,
+            label=f"{BOX_SECTOR} sector"
+        )
+
+        ax.add_patch(rect)
+
+
 
     # --------------------------------------------------------
     # Highlight selected stations
@@ -225,8 +303,8 @@ def plot_map():
     if PLOT_STATIONS or HIGHLIGHT_STATIONS:
         ax.legend(loc="lower left")
 
-    ax.set_title(f"Ozone temporal mean - ground level")
-    #ax.set_title('Stations positions')
+    ax.set_title(f"Ozone temporal std - ground level")
+    #ax.set_title('Stations positions with C10 sector')
     plt.tight_layout()
     plt.savefig(OUT_FILE, dpi=300, bbox_inches="tight")
     plt.show()

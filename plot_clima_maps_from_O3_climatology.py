@@ -17,8 +17,8 @@ PARQUET_DIR = Path("/mnt/store01/agkiokas/CAMS/stations_parquet/")
 LEVEL_LOOKUP_FILE = Path("/home/agkiokas/CAMS/lookups/station_level_lookup.parquet")
 
 # choose stations
-#STATION_LIST = ["1001A","1003A","1004A","1005A","1006A","1007A"]
-STATION_LIST = None   # use all stations found in PARQUET_DIR
+STATION_LIST = ["1001A","1146A","2209A"]
+#STATION_LIST = None   # use all stations found in PARQUET_DIR
 
 # choose climatology context
 CLIM_KIND = "day_night"              # "all", "season", "day_night", "season_day_night"
@@ -499,11 +499,11 @@ def main():
         if summary.empty:
             print("No data for this context")
             continue
-
-        suffix = context_suffix_for(clim_kind, season_name, day_night_name)
-        summary_file = OUT_DIR / f"station_cv_summary_{suffix}.csv"
-        summary.to_csv(summary_file, index=False)
-        print(f"Saved summary table: {summary_file}")
+        
+        #suffix = context_suffix_for(clim_kind, season_name, day_night_name)
+        #summary_file = OUT_DIR / f"station_cv_summary_{suffix}.csv"
+        #summary.to_csv(summary_file, index=False)
+        #print(f"Saved summary table: {summary_file}")
 
         all_summaries.append(summary)
 
