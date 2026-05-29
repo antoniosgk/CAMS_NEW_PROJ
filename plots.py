@@ -16,43 +16,51 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib as mpl
 import pandas as pd
 
-def _gradual_reds(n, cmap_name="Reds", start=0.25, end=0.85):
+def _gradual_reds(n, cmap_name="Reds", start=0.25, end=0.95):
     """
-    Returns n colors sampled from a red colormap from dark->light.
-    start/end are positions in [0,1] within the colormap.
+    Returns n colors sampled from a red colormap.
+    Defaults match the old SECTOR_COLORS formula.
     """
     if n <= 0:
         return []
+
+    if n == 1:
+        vals = [start]
+    else:
+        vals = np.linspace(start, end, n)
+
     cmap = mpl.colormaps.get_cmap(cmap_name)
-    vals = np.linspace(start, end, n)
     return [cmap(v) for v in vals]
 
-def get_sector_colormap(n_sectors, cmap_name="viridis"):
+def get_sector_colormap(n_sectors, cmap_name="Reds"):
     """
     Returns a consistent list of colors for sectors.
-    Used everywhere (rectangles, sector CV plots, ratio plots).
     """
-    import matplotlib.pyplot as plt
-    import numpy as np
+    colors = _gradual_reds(
+        n_sectors,
+        cmap_name=cmap_name,
+        start=0.25,
+        end=0.95
+    )
 
     cmap = plt.get_cmap(cmap_name)
 
-    colors = [cmap(i) for i in np.linspace(0, 1, n_sectors)]
-
     return colors, cmap
-
-def sector_color_mapping(labels=None, n=None, cmap_name="Reds",
-                         start=0.85, end=0.25, base0_color="black"):
+def sector_color_mapping(
+    labels=None,
+    n=None,
+    cmap_name="Reds",
+    start=0.25,
+    end=0.95,
+    base0_color="black"
+):
     """
     Builds a deterministic color mapping for labels OR returns a color list.
 
-    - If labels include C0 or d0 (case-insensitive), those get base0_color.
-    - The remaining labels get a gradual red palette (dark->light).
-
-    Returns:
-      - If labels is provided: dict {label: color}
-      - Else: list of colors length n
+    - If labels include C0 or d0, those get base0_color.
+    - The remaining labels get the same red gradient as SECTOR_COLORS.
     """
+
     if labels is None:
         if n is None:
             raise ValueError("sector_color_mapping: provide either labels or n.")
@@ -61,21 +69,20 @@ def sector_color_mapping(labels=None, n=None, cmap_name="Reds",
     labels = list(labels)
     lower = [str(x).lower() for x in labels]
 
-    # Detect "center" bin (C0 or d0)
     is_base0 = [("c0" == s) or ("d0" == s) for s in lower]
-
-    # Build palette for non-base0 items
     n_non0 = sum(not b for b in is_base0)
     reds = _gradual_reds(n_non0, cmap_name=cmap_name, start=start, end=end)
 
     mapping = {}
     ridx = 0
+
     for lab, b0 in zip(labels, is_base0):
         if b0:
             mapping[lab] = base0_color
         else:
             mapping[lab] = reds[ridx]
             ridx += 1
+
     return mapping
 
 def _sanitize_filename(s: str) -> str:
@@ -225,7 +232,8 @@ def plot_variable_on_map(
         vmax = float(np.nanmax(data_arr))
 
     norm = Normalize(vmin=vmin, vmax=vmax)
-
+    
+    
     im = None
     if plot_species:
       LON_S, LAT_S = np.meshgrid(lons_small, lats_small)
@@ -257,18 +265,18 @@ def plot_variable_on_map(
 
     # --- Two colorbars (terrain left, species right) ---
     cb_w=0.02
-    cb_h=0.60
-    cb_y=0.18
+    cb_h=0.8
+    cb_y=0.07
     #left colorbar(terrain)
     if terrain_im is not None:
-        cax_terr=fig.add_axes([0.01,cb_y,cb_w,cb_h])
+        cax_terr=fig.add_axes([0.05,cb_y,cb_w,cb_h])
         cb_terr=fig.colorbar(terrain_im,cax=cax_terr)
         cb_terr.set_label("Elevation (m)")
 
     #right colorbar (species)
     if plot_species:
       cax_sp=fig.add_axes([0.8,cb_y,cb_w,cb_h])
-      cb_sp=fig.colorbar(im,cax=cax_sp)
+      cb_sp=fig.colorbar(im,cax=cax_sp,shrink=0.95,extend='both')
       cb_sp.set_label(units)    
     
     if not plot_species and terrain_im is not None:
@@ -351,8 +359,8 @@ def plot_rectangles(
     meta=None,
     radii=None,
     cmap_name="Reds",
-    start=0.85,
-    end=0.25,
+    start=0.25,
+    end=0.95,
     base_center_color="black"
 ):
     import numpy as np
@@ -476,7 +484,7 @@ def plot_cv_cumulative_sectors(stats_unw, stats_w, title=None, ax=None):
     ax.set_xticks(x)
     ax.set_xticklabels([f"{k}" for k in x])
     ax.grid(True, linestyle="--", alpha=0.4)
-    #ax.set_ylim(0.0,20)
+    ax.set_ylim(0.0,80)
     ax.legend()
 
     if title:
@@ -742,7 +750,7 @@ def plot_cv_bars_distance_both(df_cv_unw, df_cv_w, ax=None, title=None, reverse=
     return fig, ax
 
 def plot_cv_bars_sector_both(stats_unw, stats_w, title=None, ax=None,cmap_name="Reds",
-                           start=0.85, end=0.25):
+                           start=0.25, end=0.85):
     """
     Bar plot of CV (unweighted vs area-weighted) for cumulative sectors C1, C2, ...
     X-axis ticks: 1..N (Sector), matching the style in your image.
@@ -790,7 +798,7 @@ def plot_cv_bars_sector_both(stats_unw, stats_w, title=None, ax=None,cmap_name="
     ax.set_xlabel("Sector")
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
-
+    ax.set_ylim(0,0.8)
     ax.set_ylabel("Coefficient of Variation %")
     ax.grid(True, linestyle="--", alpha=0.35)
 
@@ -801,7 +809,7 @@ def plot_cv_bars_sector_both(stats_unw, stats_w, title=None, ax=None,cmap_name="
     return fig, ax
 
 def plot_ratio_bars(df_ratio, ax=None, title=None, ylabel="Mean / center value",
-                    xlabel='Distance',cmap_name="Reds", start=0.85, end=0.25):
+                    xlabel='Distance',cmap_name="Reds", start=0.25, end=0.85):
     """
     df_ratio: DataFrame with columns ["label", "ratio"]
      Bars are colored consistently with sectors:
@@ -846,7 +854,7 @@ def _ensure_datetime(df, date_col="date", time_col="time"):
 
 
 def plot_cum_sector_ratio_timeseries(
-    df_per_timestep,cmap_name="Reds",start=0.25,end=0.85,
+    df_per_timestep,cmap_name="Reds",start=0.85,end=0.25,
     ax=None,
     title=None,
     ylabel="Cumulative sector mean / center",xlim=None

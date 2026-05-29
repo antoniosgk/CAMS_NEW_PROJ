@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 from matplotlib.patches import Rectangle
-
+plt.rcParams['font.weight'] = 'bold'
 # ============================================================
 # SETTINGS
 # ============================================================
@@ -49,19 +49,18 @@ AUTO_SELECT_COORDS = True
 
 CONVERT_KGKG_TO_PPB = True
 LEVEL_TO_PLOT = 72          # last level
-PLOT_O3 = True
+PLOT_O3 = False
 PLOT_STATIONS = False
 
-#HIGHLIGHT_STATIONS = []   # [] for none
 
 STATION_NAME_COL = "Station_Name"
 STATION_LAT_COL = "Latitude"
 STATION_LON_COL = "Longitude"
 
-FIGSIZE = (11, 8)
+FIGSIZE = (20, 10)
 CMAP = "viridis"
 MARKER_SIZE = 25
-HIGHLIGHT_SIZE = 90
+HIGHLIGHT_SIZE = 400
 
 MAP_PADDING_DEG = 0
 
@@ -69,20 +68,20 @@ MAP_PADDING_DEG = 0
 # ============================================================
 CENTER_BOXES_ON_GRIDCELL = True
 SHOW_STATION_LABELS = False
-HIGHLIGHT_STATIONS = False #["1002A"]   # one or more stations to highlight
+HIGHLIGHT_STATIONS = []   # one or more stations to highlight or []
 
 DRAW_SECTOR_BOXES = True
 BOX_STATION = "1002A"
 
 # Plot one or many sectors
-BOX_SECTORS = ["C1", "C2","C3","C4", "C5", "C10"]
-# BOX_SECTORS = [f"C{i}" for i in range(1, 11)]
+#BOX_SECTORS = ["C1", "C2","C3","C4", "C5", "C10"]
+BOX_SECTORS = [f"C{i}" for i in range(1, 11)]
 
 DRAW_CAMS_BOX = True
 CAMS_BOX_DEG = 0.4        # 0.4 degree box
 CAMS_BOX_COLOR = "gray"
 CAMS_BOX_LINEWIDTH = 2.0
-CAMS_BOX_LABEL = "0.4° simulation box"
+CAMS_BOX_LABEL = "0.4° CAMS box"
 
 SECTOR_LINEWIDTH = 1.2
 
@@ -258,10 +257,12 @@ def get_sector_box_bounds_from_center(center_lon, center_lat, lon, lat, sector):
     """
     Sector boxes centered on nearest grid-cell center.
 
-    C1  = 3x3 cells
-    C2  = 5x5 cells
+    Correct interpretation:
+    C1  = 3x3 cells  -> width = 3  * dx
+    C2  = 5x5 cells  -> width = 5  * dx
+    C3  = 7x7 cells  -> width = 7  * dx
     ...
-    C10 = 21x21 cells
+    C10 = 21x21 cells -> width = 21 * dx
     """
 
     sector_num = int(str(sector).replace("C", ""))
@@ -273,16 +274,16 @@ def get_sector_box_bounds_from_center(center_lon, center_lat, lon, lat, sector):
     i_lon = int(np.argmin(np.abs(lon_1d - center_lon)))
     i_lat = int(np.argmin(np.abs(lat_1d - center_lat)))
 
-    i_lon_min = max(i_lon - half_cells, 0)
-    i_lon_max = min(i_lon + half_cells, len(lon_1d) - 1)
+    # grid spacing
+    dlon = float(np.nanmedian(np.diff(lon_1d)))
+    dlat = float(np.nanmedian(np.diff(lat_1d)))
 
-    i_lat_min = max(i_lat - half_cells, 0)
-    i_lat_max = min(i_lat + half_cells, len(lat_1d) - 1)
+    # sector contains (2*half_cells + 1) grid cells
+    lon_min = float(lon_1d[i_lon] - (half_cells + 0.5) * dlon)
+    lon_max = float(lon_1d[i_lon] + (half_cells + 0.5) * dlon)
 
-    lon_min = float(lon_1d[i_lon_min])
-    lon_max = float(lon_1d[i_lon_max])
-    lat_min = float(lat_1d[i_lat_min])
-    lat_max = float(lat_1d[i_lat_max])
+    lat_min = float(lat_1d[i_lat] - (half_cells + 0.5) * dlat)
+    lat_max = float(lat_1d[i_lat] + (half_cells + 0.5) * dlat)
 
     return lon_min, lon_max, lat_min, lat_max
 
@@ -335,6 +336,16 @@ def plot_map():
         ],
         crs=ccrs.PlateCarree(),
     )
+    ax.set_extent(
+        [
+            100,
+            130,
+            25,
+            45,
+        ],
+        crs=ccrs.PlateCarree(),
+    )
+
 
     # --------------------------------------------------------
     # Cartopy features
@@ -395,19 +406,49 @@ def plot_map():
     # --------------------------------------------------------
 
     if PLOT_STATIONS:
+
+    # normal stations
+        normal = stations[
+            ~stations[STATION_NAME_COL].isin(
+            [str(s) for s in HIGHLIGHT_STATIONS]
+            )
+        ]
+
         ax.scatter(
-            stations[STATION_LON_COL],
-            stations[STATION_LAT_COL],
-            s=MARKER_SIZE,
-            facecolor="black",
+        normal[STATION_LON_COL],
+        normal[STATION_LAT_COL],
+        s=MARKER_SIZE,
+        facecolor="black",
+        edgecolor="black",
+        linewidth=0.7,
+        marker="o",
+        transform=ccrs.PlateCarree(),
+        zorder=5,
+        label="Stations",
+    )
+
+    # highlighted stations
+    if HIGHLIGHT_STATIONS:
+
+        highlight = stations[
+            stations[STATION_NAME_COL].isin(
+                [str(s) for s in HIGHLIGHT_STATIONS]
+            )
+        ]
+
+        ax.scatter(
+            highlight[STATION_LON_COL],
+            highlight[STATION_LAT_COL],
+            s=HIGHLIGHT_SIZE,
+            facecolor="red",
             edgecolor="black",
-            linewidth=0.7,
+            linewidth=1.5,
             marker="o",
             transform=ccrs.PlateCarree(),
-            zorder=5,
-            label="Stations",
+            zorder=8,
+            label="Highlighted station",
         )
-        '''
+        
         ax.set_extent(
         [
             105 ,
@@ -417,7 +458,7 @@ def plot_map():
         ],
         crs=ccrs.PlateCarree(),
     )
- '''
+ 
         
         # --------------------------------------------------------
     # Sector boxes and CAMS 0.4 degree box
@@ -512,7 +553,17 @@ def plot_map():
             zorder=12,
             label=f"Station {BOX_STATION}",
         )
+
 '''
+        ax.set_extent(
+        [
+            70 ,
+            135,
+            15,
+            52,
+        ],
+        crs=ccrs.PlateCarree(),
+    )
         # Grid-cell center used for boxes
         if CENTER_BOXES_ON_GRIDCELL:
             ax.scatter(
@@ -540,7 +591,14 @@ def plot_map():
             )
 
 
-
+    ax.set_extent(
+        [
+            115.2 ,
+            117.2 + MAP_PADDING_DEG,
+            39.3 - MAP_PADDING_DEG,
+            41.3 + MAP_PADDING_DEG,
+        ],
+        crs=ccrs.PlateCarree(),)
     # --------------------------------------------------------
     # Highlight selected stations
     # --------------------------------------------------------
@@ -562,7 +620,7 @@ def plot_map():
             zorder=7,
             label="Highlighted stations",
         )
-
+        '''
         for _, row in highlight.iterrows():
             ax.text(
                 row[STATION_LON_COL],
@@ -573,7 +631,7 @@ def plot_map():
                 transform=ccrs.PlateCarree(),
                 zorder=8,
             )
-
+'''
     if PLOT_STATIONS or HIGHLIGHT_STATIONS or DRAW_SECTOR_BOXES or DRAW_CAMS_BOX:
         ax.legend(loc="lower left", fontsize=8)
 
@@ -599,9 +657,10 @@ def plot_map():
         except Exception:
             pass
 
-    ax.set_title(title)
+    #ax.set_title(title)
+    ax.set_title("Sectors",fontsize=16,fontweight='bold')
     plt.tight_layout()
-    plt.savefig(OUT_FILE, dpi=300, bbox_inches="tight")
+    plt.savefig(OUT_FILE, dpi=400, bbox_inches="tight")
     plt.show()
 
 

@@ -18,12 +18,12 @@ RUN_MODE = "one"          # "one", "multi", "both"
 species = "O3"
 mode = "A"
 units = "ppb"
-
-TIME_PERIOD_MODE = "custom"     # "all" or "custom"
+plt.rcParams['font.weight'] = 'bold'
+TIME_PERIOD_MODE = "all"     # "all" or "custom"
 START_DATE = "2005-06-09"    # used only if TIME_PERIOD_MODE = "custom"
 END_DATE = "2005-06-16"      # used only if TIME_PERIOD_MODE = "custom"
 
-station = "1002A"
+station = "1006A"
 stations = ["1001A","1002A","1003A","1004A","1005A"]
 #stations="all"
 SECTOR_TYPE = "CUM"
@@ -34,8 +34,8 @@ AGGREGATE_CV_OVER_SECTORS = False
 CV_SECTOR="C10"
 MERGE_SEASONAL_YEARS = True
 SP_LIM=None
-CV_LIM=None
-RATIO_LIM=(0.7,1.3)
+CV_LIM=(0,30)
+RATIO_LIM=(0.7,1.5)
 SCATTER_COLOR = "tab:blue"
 
 PARQUET_CSV_DIR="/mnt/store01/agkiokas/CAMS/stations_parquet/"
@@ -266,6 +266,25 @@ def format_season_time_axis(ax, season, merge_years=False, axis_info=None):
     ax.xaxis.set_major_locator(mdates.MonthLocator(bymonth=season_months[season]))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b\n%Y"))
     ax.tick_params(axis="x", rotation=45)
+
+def style_time_axis(ax, title_size=13, label_size=11, tick_size=9):
+    ax.margins(x=0)
+    ax.set_xlim(ax.lines[0].get_xdata()[0], ax.lines[0].get_xdata()[-1])
+
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+
+    ax.title.set_fontsize(title_size)
+    ax.title.set_fontweight("bold")
+
+    ax.xaxis.label.set_fontsize(label_size)
+    ax.xaxis.label.set_fontweight("bold")
+
+    ax.yaxis.label.set_fontsize(label_size)
+    ax.yaxis.label.set_fontweight("bold")
+
+    ax.tick_params(axis="both", labelsize=tick_size)
+    ax.tick_params(axis="x", rotation=35)    
 # ============================================================
 # 4. MERGE STATION METADATA
 # ============================================================
@@ -327,11 +346,10 @@ def get_sector_order(sectors):
 
 
 def make_red_pink_gradient(n=10):
-    colors = []
-    red_vals = np.linspace(0.85, 1.0, n)
-    gb_vals = np.linspace(0.85, 0.25, n)
-    for r, gb in zip(red_vals, gb_vals):
-        colors.append((r, gb, gb))
+    colors = [
+        plt.cm.Reds(0.25 + 0.70 * i / (n - 1))
+        for i in range(n)
+    ]
     return [to_hex(c) for c in colors]
 
 # ============================================================
@@ -1623,7 +1641,7 @@ def plot_center_timeseries_full_period(
     if stations_df is not None:
         alt_map = dict(zip(stations_df["Station_Name"], stations_df["Altitude"]))
 
-    fig, ax = plt.subplots(figsize=figsize)
+    fig, ax = plt.subplots(figsize=figsize,dpi=400)
 
     for st, sub in data.groupby("station"):
         label = st
@@ -1640,11 +1658,14 @@ def plot_center_timeseries_full_period(
             title += " - selected stations"
 
     ax.set_title(title)
-    ax.set_xlabel("Time")
-    ax.set_ylabel(f"{species} ({units})")
+    ax.set_xlabel("Time",fontsize=11,fontweight='bold')
+    ax.set_ylabel(f"{species} ({units})",fontsize=11,fontweight='bold')
     ax.set_ylim(sp_lim)
-    ax.tick_params(axis="x", rotation=45)
+    #ax.tick_params(axis="x", rotation=45)
+    style_time_axis(ax)
     ax.grid(True, alpha=0.3)
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+       label.set_weight('bold')
     ax.legend()
 
     fig.tight_layout()
@@ -1708,15 +1729,15 @@ def plot_one_station_cv_timeseries_full_period(
     title = f"{species} full-period Coefficient of variation (%) by sector | {station}"
     if pd.notna(altitude):
         title += f" ({altitude:.0f} m)"
-    if sector_type is not None:
-        title += f" | sector_type={sector_type}"
+    
 
-    ax.set_title(title)
-    ax.set_xlabel("Time")
-    ax.set_ylabel(f"{cv_col} (%)")
+    ax.set_title(title,fontsize=11,fontweight='bold')
+    ax.set_xlabel("Time",fontsize=11,fontweight='bold')
+    ax.set_ylabel("CV (%)",fontsize=11,fontweight='bold')
     ax.grid(True, alpha=0.3)
     ax.legend(title="Sector", fontsize=8, ncol=2)
-    ax.tick_params(axis="x", rotation=45)
+    #ax.tick_params(axis="x", rotation=45)
+    style_time_axis(ax)
 
     if cv_lim is not None:
         ax.set_ylim(cv_lim)
@@ -1795,12 +1816,11 @@ def plot_one_station_ratio_meanw_to_center(
     title = f"{species} Ratio mean to central gridcell by sector | {station}"
     if pd.notna(altitude):
         title += f" ({altitude:.0f} m)"
-    if sector_type is not None:
-        title += f" | sector_type={sector_type}"
+    
 
-    ax.set_title(title)
-    ax.set_xlabel("Concatenated timeline" if merge_years else "Time")
-    ax.set_ylabel("Mean/central grid cell")
+    ax.set_title(title,fontsize=11,fontweight='bold')
+    ax.set_xlabel("Concatenated timeline" if merge_years else "Time",fontsize=11,fontweight='bold')
+    ax.set_ylabel("Mean/central grid cell",fontsize=11,fontweight='bold')
     ax.grid(True, alpha=0.3)
     ax.legend(title="Sector", fontsize=8, ncol=2)
 
@@ -1812,7 +1832,8 @@ def plot_one_station_ratio_meanw_to_center(
                 ax.set_xticks(axis_info["tick_positions"])
                 ax.set_xticklabels(axis_info["tick_labels"], rotation=45)
     else:
-        ax.tick_params(axis="x", rotation=45)
+        #ax.tick_params(axis="x", rotation=45)
+        style_time_axis(ax)
 
     if ratio_lim is not None:
         ax.set_ylim(ratio_lim)
@@ -1930,6 +1951,7 @@ def run_full_station_analysis(
     out_path=f"{out_dir_one}/{station}_{species}_full_period_cvw_by_sector.png",
     cv_lim=CV_LIM
 )
+    '''
     plot_one_station_seasonal_boxplot_ratio_meanw_to_center(
         df=df,
         station=station,
@@ -1942,6 +1964,7 @@ def run_full_station_analysis(
         out_path=os.path.join(out_dir, f"{station}_{species}_seasonal_boxplot_ratio_meanw_to_center.png"),
         ratio_lim=None
     )
+    
     plot_one_station_seasonal_center(
         df=df,
         station=station,
@@ -2111,7 +2134,7 @@ def run_full_station_analysis(
         "pairs": pairs,
     }
 
-
+'''
 def run_full_multi_station_analysis(
     df,
     stations,

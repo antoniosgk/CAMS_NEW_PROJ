@@ -10,7 +10,7 @@ base_path = "/mnt/store01/agkiokas/CAMS/inst/subsets"
 product = "inst3d"
 species = "O3"
 date = "20050520"
-time = "0600"
+time = "0300"
 
 species_file = Path(f"{base_path}/{species}/{product}_{species}_{date}_{time}.nc4")
 pl_file      = Path(f"{base_path}/PL/{product}_PL_{date}_{time}.nc4")

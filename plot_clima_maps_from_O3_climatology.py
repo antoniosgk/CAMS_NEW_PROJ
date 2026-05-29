@@ -5,7 +5,7 @@ import pandas as pd
 import xarray as xr
 import matplotlib.pyplot as plt
 
-
+plt.rcParams['font.weight'] = 'bold'
 # ============================================================
 # USER SETTINGS
 # ============================================================
@@ -17,11 +17,11 @@ PARQUET_DIR = Path("/mnt/store01/agkiokas/CAMS/stations_parquet/")
 LEVEL_LOOKUP_FILE = Path("/home/agkiokas/CAMS/lookups/station_level_lookup.parquet")
 
 # choose stations
-STATION_LIST = ["1001A","1146A","2209A"]
-#STATION_LIST = None   # use all stations found in PARQUET_DIR
+#STATION_LIST = ["1001A","1146A","2209A"]
+STATION_LIST = None   # use all stations found in PARQUET_DIR
 
 # choose climatology context
-CLIM_KIND = "day_night"              # "all", "season", "day_night", "season_day_night"
+CLIM_KIND = "all"              # "all", "season", "day_night", "season_day_night"
 SEASON_NAME = "Spring"         # used for "season" and "season_day_night"
 DAY_NIGHT_NAME = "day"         # used for "day_night" and "season_day_night"
 
@@ -30,17 +30,22 @@ VAR_ALL = "O3_mean_all"
 VAR_SEASON = "O3_mean_season"
 VAR_DAYNIGHT = "O3_mean_daynight"
 VAR_SEASON_DAYNIGHT = "O3_mean_season_daynight"
+#---------------------------------------
+PLOT_SECTORS_TOGETHER = True   # True -> one 2x5 / 5x2 subplot figure
+SUBPLOT_LAYOUT = "5x2"         # "2x5" or "5x2"
 
+# If plotting together, use all C1-C10
+SECTORS_ALL = [f"C{i}" for i in range(1, 11)]
 # sectors to map
-SECTORS = ["C10"]
+SECTORS = SECTORS_ALL if PLOT_SECTORS_TOGETHER else ["C10"]
 
 # options
 WEIGHTED = True
 LABEL_STATIONS = False
-FIGSIZE = (12, 6)
-MAP_EXTENT = None
+FIGSIZE = (20, 10) #for separate sectors
+#MAP_EXTENT = None
 # Example:
-#MAP_EXTENT = [116, 117, 39.6, 40.4]   # [lon_min, lon_max, lat_min, lat_max]
+MAP_EXTENT = [70, 135, 15, 52]   # [lon_min, lon_max, lat_min, lat_max]
 OUT_DIR = Path("/mnt/store01/agkiokas/CAMS/output_station_maps")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -357,14 +362,13 @@ def plot_station_map(df_summary, metric_col, title, cbar_label, outfile=None,vma
 
         if MAP_EXTENT is not None:
             ax.set_extent(MAP_EXTENT, crs=ccrs.PlateCarree())
-
         sc = ax.scatter(
             df_summary["lon"],
             df_summary["lat"],
             c=df_summary[metric_col],
-            cmap="inferno",
-            s=100,
-            edgecolor="k",vmax=vmax,vmin=vmin,
+            cmap="viridis",
+            s=100,linewidth=0.4,
+            edgecolor="k",vmax=3,vmin=0.2,
             transform=ccrs.PlateCarree(),
         )
 
@@ -375,18 +379,22 @@ def plot_station_map(df_summary, metric_col, title, cbar_label, outfile=None,vma
                     fontsize=12, transform=ccrs.PlateCarree()
                 )
 
-        ax.set_title(title)
-        plt.colorbar(sc, ax=ax, label=cbar_label)
+        ax.set_title(title,fontweight='bold',fontsize=16)
+        cbar = plt.colorbar(sc, ax=ax, shrink=0.95, pad=0.03,extend='both')
+        cbar.set_label(cbar_label,fontweight='bold',fontsize=13)
+        cbar.ax.tick_params(labelsize=13)
 
     except Exception:
         fig, ax = plt.subplots(figsize=FIGSIZE)
+        vmin=0.5
+        vmax=4
         sc = ax.scatter(
             df_summary["lon"],
             df_summary["lat"],
             c=df_summary[metric_col],
-            cmap="inferno",
+            cmap="viridis",
             s=100,
-            edgecolor="k",
+            edgecolor="k",linewidth=0.4,
             vmax=vmax,vmin=vmin
         )
 
@@ -401,13 +409,109 @@ def plot_station_map(df_summary, metric_col, title, cbar_label, outfile=None,vma
         ax.set_xlabel("Longitude")
         ax.set_ylabel("Latitude")
         ax.grid(True, alpha=0.3)
-        ax.set_title(title)
-        plt.colorbar(sc, ax=ax, label=cbar_label)
-
+        ax.set_title(title,fontweight='bold',fontsize=16)
+        cbar = plt.colorbar(sc, ax=ax, shrink=1.0, pad=0.03,extend='both')
+        cbar.set_label(cbar_label,fontweight='bold',fontsize=13)
+        cbar.ax.tick_params(labelsize=13)
     fig.tight_layout()
     if outfile is not None:
-        fig.savefig(outfile, dpi=200, bbox_inches="tight")
+        fig.savefig(outfile, dpi=400, bbox_inches="tight")
     plt.show()
+
+def plot_all_sectors_subplot(
+    summary,
+    metric_col,
+    title,
+    cbar_label,
+    outfile=None,
+    vmin=None,
+    vmax=None,
+):
+    try:
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+        import matplotlib.ticker as mticker
+
+        projection = ccrs.PlateCarree()
+
+        if SUBPLOT_LAYOUT == "2x5":
+            nrows, ncols = 2, 5
+            figsize = (14, 8)
+        else:
+            nrows, ncols = 5, 2
+            figsize = (8, 14)
+
+        fig, axes = plt.subplots(
+            nrows=nrows,
+            ncols=ncols,
+            figsize=figsize,
+            subplot_kw={"projection": projection},
+            constrained_layout=True,
+        )
+
+        axes = axes.ravel()
+
+        last_sc = None
+
+        for ax, sector in zip(axes, SECTORS_ALL):
+            sub = summary[summary["sector"] == sector].copy()
+
+            ax.add_feature(cfeature.COASTLINE, linewidth=0.6)
+            ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+            ax.add_feature(cfeature.LAND, alpha=0.2)
+            ax.add_feature(cfeature.OCEAN, alpha=0.1)
+
+            if MAP_EXTENT is not None:
+                ax.set_extent(MAP_EXTENT, crs=projection)
+
+            gl = ax.gridlines(
+                draw_labels=True,
+                linewidth=0.4,
+                color="gray",
+                alpha=0.4,
+                linestyle="--",
+            )
+            gl.top_labels = False
+            gl.right_labels = False
+            gl.xlabel_style = {"size": 8}
+            gl.ylabel_style = {"size": 8}
+            gl.xlocator = mticker.MaxNLocator(4)
+            gl.ylocator = mticker.MaxNLocator(4)
+
+            last_sc = ax.scatter(
+                sub["lon"],
+                sub["lat"],
+                c=sub[metric_col],
+                cmap="inferno",
+                s=50,
+                edgecolor="k",
+                linewidth=0.4,
+                vmin=vmin,
+                vmax=vmax,
+                transform=projection,
+                zorder=5,
+            )
+
+            ax.set_title(sector, fontsize=13, fontweight="bold")
+
+        cbar = fig.colorbar(
+            last_sc,
+            ax=axes,
+            shrink=0.93,
+            pad=0.01,extend='both',fraction=0.2
+        )
+        cbar.set_label(cbar_label, fontsize=13, fontweight="bold")
+        cbar.ax.tick_params(labelsize=11)
+
+        fig.suptitle(title, fontsize=18, fontweight="bold")
+
+        if outfile is not None:
+            fig.savefig(outfile, dpi=400, bbox_inches="tight")
+
+        plt.show()
+
+    except Exception as e:
+        print(f"Could not create subplot map: {e}")    
 
 def compute_summary_for_context(clim_kind, season_name=None, day_night_name=None):
     ds_clim, da_clim, lat2d, lon2d = open_climatology_field_for_context(
@@ -520,21 +624,37 @@ def main():
     for summary in all_summaries:
         suffix = summary["context"].iloc[0]
 
-        for sector in SECTORS:
-            sub = summary[summary["sector"] == sector].copy()
-            if sub.empty:
-                continue
+        if PLOT_SECTORS_TOGETHER:
+           title = f"Climatological CV (%) | all sectors | Approach 1"
+           outfile = OUT_DIR / f"map_cv_all_sectors_{suffix} {SUBPLOT_LAYOUT}.png"
 
-            title = f"Climatological area-weighted CV (%) | {sector} | {suffix}"
-            outfile = OUT_DIR / f"map_cv_{sector}_{suffix}.png"
+           plot_all_sectors_subplot(
+            summary,
+            metric_col="cv_pct",
+            title=title,
+            cbar_label="CV (%)",
+            vmin=0.2,
+            vmax=4,
+            outfile=outfile,
+        )
 
-            plot_station_map(
+        else:
+           for sector in SECTORS:
+               sub = summary[summary["sector"] == sector].copy()
+               if sub.empty:
+                   continue
+
+               title = f"Climatological area-weighted CV (%) | {sector} | {suffix}"
+               outfile = OUT_DIR / f"map_cv_{sector}_{suffix}.png"
+
+               plot_station_map(
                 sub,
                 metric_col="cv_pct",
                 title=title,
                 cbar_label="CV (%)",
-                vmax=vmax_global,vmin=vmin_global,
-                outfile=outfile
+                vmin=vmin_global,
+                vmax=vmax_global,
+                outfile=outfile,
             )
 if __name__ == "__main__":
     main()

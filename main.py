@@ -57,7 +57,7 @@ from station_level_lookup import build_and_save_station_level_lookup # type: ign
 #%%
 # USER SETTINGS
 # -----------------------
-RUN_PERIOD = True
+RUN_PERIOD = False
 BUILD_K_LOOKUP = False  #True when we want to build the parquet files,i have already done that!!
 
 START_DT = datetime.datetime(2005, 5, 16, 0, 00)
@@ -71,7 +71,7 @@ MODE = "A"          # "A" or "HEIGHT"
 #   "all"    -> all valid stations
 STATION_SELECTION = "single"
 
-STATION_IDX = 1001
+STATION_IDX = 1002
 STATION_IDXS = [1, 5, 8]
 
 # lookup generation selection mode:

@@ -46,16 +46,16 @@ from plots import (
     plot_cum_sector_ratio_timeseries,
     plot_cum_distance_ratio_timeseries,
     plot_variable_on_map,plot_rectangles,
-    plot_cum_sector_cv_timeseries
+    plot_cum_sector_cv_timeseries,_gradual_reds
 )
 
 from io_netcdf import df30min_to_netcdf_station_species
 
-#%%
+
 # -----------------------
 # USER SETTINGS
 # -----------------------
-RUN_PERIOD = True
+RUN_PERIOD = False
 
 # Period settings (only used when RUN_PERIOD=True)
 START_DT = datetime.datetime(2005, 6, 16, 0, 0)  #yyyy,m,d,hr,min
@@ -64,13 +64,12 @@ print("START_DT:", START_DT)
 print("END_DT:", END_DT)
 print("Generated timestamps:", list(iter_timestamps(START_DT, END_DT, 30)))
 # Mode works for BOTH single timestep and period
-MODE = "A"          # "A" or "HEIGHT"
-idx = 5
+MODE = "HEIGHT"          # "A" or "HEIGHT"
+idx = 5    #index of the station
 cell_nums = 10
 dist_bins_km = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 out_dir = "/home/agkiokas/CAMS/plots/"
 
-#%%
 # -----------------------
 # INTERNAL HELPERS
 # -----------------------
@@ -182,8 +181,10 @@ def run_single_timestep(mode="A", weighted=True):
          i, j, i1_s, i2_s, j1_s, j2_s,to_ppb_fn=to_ppb_mmr)
 
        # Define our global plot limits
-        vmin_plot = meta_ref['min']
-        vmax_plot = meta_ref['max']
+        #vmin_plot = meta_ref['min']
+        #vmax_plot = meta_ref['max']
+        vmin_plot=53
+        vmax_plot=54
         # build ppb field (small box) using chosen vertical mode
         if str(mode).upper() == "A":
             grid_ppb, meta_v = extract_smallbox_ppb_optionA_fixed_k(
@@ -283,7 +284,7 @@ def run_single_timestep(mode="A", weighted=True):
         fig_r1, ax_r1 = plot_ratio_bars(
             df_ratio_cum,
             xlabel="Sectors",
-            title=f"{species} {time_str} UTC: sector mean / center: Same Model Level" if mode=='A'  else f"{species} {time_str} UTC: sector mean / center: Same altitude ASL"
+            title=f"{species} {time_str} UTC: sector mean / center for same model level" if mode=='A'  else f"{species} {time_str} UTC: sector mean / center: Same altitude ASL"
              )
 
         df_ratio_dist = distance_cumulative_mean_ratio_to_center(
@@ -330,6 +331,7 @@ def run_single_timestep(mode="A", weighted=True):
 
         plot_rectangles(ax2, lats_small, lons_small, ii, jj, im2, meta=meta,radii=radii)
         plt.show()
+        '''
          # FIG 3 — Topography-only map
         # ============================================================
         fig3, ax3, _ = plot_variable_on_map(
@@ -431,7 +433,7 @@ def run_single_timestep(mode="A", weighted=True):
         ax4.set_title("Stations map", pad=18)
         plt.show()
         #HERE PUT 2 PROFILE PLOTS
-    
+        '''
         print("Vertical meta:", meta_v)
 
     finally:

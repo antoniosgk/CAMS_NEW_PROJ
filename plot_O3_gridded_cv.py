@@ -7,12 +7,13 @@ import xarray as xr
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-
+import matplotlib.ticker as mticker
+plt.rcParams['font.weight'] = 'bold'
 # ============================================================
 # SETTINGS
 # ============================================================
 
-NC_FILE = Path("/mnt/store01/agkiokas/CAMS/O3_gridded_pooled_cv.nc")
+NC_FILE = Path("/mnt/store01/agkiokas/CAMS/O3_gridded_pooled_cv_with_C0.nc")
 
 CONST_K_FILE = Path("/home/agkiokas/CAMS/lookups/station_constant_k_only_lookup.csv")
 
@@ -22,17 +23,32 @@ BIG_TIMESERIES_FILE = Path("/home/agkiokas/CAMS/lookups/station_level_timeseries
 OUT_DIR = Path("/mnt/store01/agkiokas/CAMS/O3_station_cv_plots")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-SECTOR = "C10"              # C1 ... C10
-PLOT_ALL_SECTORS = True   # True if you want plots for all C1-C10
+SECTOR = "C10"             # C0 ... C10
+PLOT_ALL_SECTORS = False   # True if you want plots for all C1-C10
 
+PLOT_SECTORS_TOGETHER = False  # True -> one subplot figure with all sectors
+SUBPLOT_LAYOUT = "5x2"         # "2x5" or "5x2"
+
+SECTORS_ALL = [f"C{i}" for i in range(1, 11)]
 SHOW_NAMES = False
 
 USE_SAME_COLORBAR_DAYNIGHT = True
 USE_SAME_COLORBAR_SEASONS = True
 
-MARKER_SIZE = 45
-FIGSIZE = (10, 7)
-CMAP = "viridis"
+MARKER_SIZE = 50
+FIGSIZE = (20, 10)
+CMAP = "inferno"
+PLOT_DIFFERENCE = True
+
+DIFF_SECTOR_A = "C10"
+DIFF_SECTOR_B = "C0"
+
+# Difference = A - B
+# Examples:
+# C10 - C0
+# C10 - C1
+# C5  - C0
+DIFF_CMAP = "inferno"
 
 THRESHOLD_DEG = -0.833
 
@@ -378,7 +394,37 @@ def extract_station_values(
 
     return np.array(values, dtype=float)
 
+def extract_station_difference(
+    ds,
+    station_info,
+    var_name,
+    sector_a,
+    sector_b,
+    level_col,
+    season=None,
+    day_night=None,
+):
+    vals_a = extract_station_values(
+        ds=ds,
+        station_info=station_info,
+        var_name=var_name,
+        sector=sector_a,
+        level_col=level_col,
+        season=season,
+        day_night=day_night,
+    )
 
+    vals_b = extract_station_values(
+        ds=ds,
+        station_info=station_info,
+        var_name=var_name,
+        sector=sector_b,
+        level_col=level_col,
+        season=season,
+        day_night=day_night,
+    )
+
+    return vals_a - vals_b
 # ============================================================
 # PLOTTING
 # ============================================================
@@ -391,34 +437,11 @@ def plot_station_map(
     vmin=None,
     vmax=None,
     show_names=False,
+    cmap=CMAP,
+    cbar_label="CV (%)"
 ):
     fig = plt.figure(figsize=FIGSIZE)
-
     ax = plt.axes(projection=ccrs.PlateCarree())
-
-    ax.set_extent(
-        [
-            float(station_info["model_lon"].min()) - 1,
-            float(station_info["model_lon"].max()) + 1,
-            float(station_info["model_lat"].min()) - 1,
-            float(station_info["model_lat"].max()) + 1,
-        ],
-        crs=ccrs.PlateCarree(),
-    )
-
-    # --------------------------------------------------------
-    # Cartopy features
-    # --------------------------------------------------------
-
-    ax.coastlines(resolution="10m", linewidth=0.8)
-
-    ax.add_feature(cfeature.BORDERS, linewidth=0.5)
-    ax.add_feature(cfeature.LAND, zorder=0)
-    ax.add_feature(cfeature.OCEAN, zorder=0)
-
-    # Optional:
-    # ax.add_feature(cfeature.LAKES, alpha=0.5)
-    # ax.add_feature(cfeature.RIVERS)
 
     # --------------------------------------------------------
     # Gridlines
@@ -429,11 +452,30 @@ def plot_station_map(
         linewidth=0.5,
         color="gray",
         alpha=0.5,
-        linestyle="--",
+        linestyle="--"
     )
 
     gl.top_labels = False
     gl.right_labels = False
+    gl.xlabel_style = {"size": 10}
+    gl.ylabel_style = {"size": 10}
+    gl.xlocator = mticker.MaxNLocator(6)
+    gl.ylocator = mticker.MaxNLocator(6)
+
+    # --------------------------------------------------------
+    # Map features: same style as your reference plot
+    # --------------------------------------------------------
+
+    ax.add_feature(cfeature.COASTLINE, linewidth=0.6)
+    ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+    ax.add_feature(cfeature.LAND, alpha=0.2)
+    ax.add_feature(cfeature.OCEAN, alpha=0.1)
+
+    # --------------------------------------------------------
+    # Map extent
+    # --------------------------------------------------------
+
+    ax.set_extent([70, 135, 15, 52], crs=ccrs.PlateCarree())
 
     # --------------------------------------------------------
     # Scatter
@@ -444,9 +486,9 @@ def plot_station_map(
         station_info["model_lat"],
         c=values,
         s=MARKER_SIZE,
-        cmap=CMAP,
-        vmin=vmin,
-        vmax=vmax,
+        cmap=cmap,
+        vmin=-0.5,
+        vmax=0.5,
         edgecolor="black",
         linewidth=0.4,
         transform=ccrs.PlateCarree(),
@@ -464,6 +506,7 @@ def plot_station_map(
                 row["model_lat"],
                 str(row["station"]),
                 fontsize=6,
+                fontweight="bold",
                 ha="left",
                 va="bottom",
                 transform=ccrs.PlateCarree(),
@@ -474,16 +517,148 @@ def plot_station_map(
     # Colorbar
     # --------------------------------------------------------
 
-    cbar = plt.colorbar(sc, ax=ax, shrink=0.8, pad=0.03)
-    cbar.set_label("CV (%)")
+    cbar = plt.colorbar(
+        sc,
+        ax=ax,
+        shrink=0.95,
+        pad=0.03,extend='both'
+    )
 
-    ax.set_title(title)
+    cbar.set_label(
+        cbar_label,
+        fontsize=13,
+        fontweight="bold"
+    )
+
+    cbar.ax.tick_params(labelsize=13)
+
+    # --------------------------------------------------------
+    # Title
+    # --------------------------------------------------------
+
+    ax.set_title(
+        title,
+        fontsize=16,
+        fontweight="bold"
+    )
+
+    # --------------------------------------------------------
+    # Save
+    # --------------------------------------------------------
 
     plt.tight_layout()
-    plt.savefig(out_file, dpi=300, bbox_inches="tight")
+    plt.savefig(out_file, dpi=400, bbox_inches="tight")
+
+    print(f"Saved: {out_file}")
+    plt.show()
+
+def plot_all_sectors_subplot(
+    station_info,
+    sector_values_dict,
+    title,
+    out_file,
+    vmin=None,
+    vmax=None,
+    show_names=False,
+):
+    import matplotlib.ticker as mticker
+
+    if SUBPLOT_LAYOUT == "2x5":
+        nrows, ncols = 2, 5
+        figsize = (22, 9)
+    else:
+        nrows, ncols = 5, 2
+        figsize = (8, 14)
+
+    fig, axes = plt.subplots(
+        nrows=nrows,
+        ncols=ncols,
+        figsize=figsize,
+        subplot_kw={"projection": ccrs.PlateCarree()},
+        constrained_layout=True,
+    )
+
+    axes = axes.ravel()
+    last_sc = None
+
+    for ax, sector in zip(axes, SECTORS_ALL):
+
+        values = sector_values_dict[sector]
+
+        ax.set_extent(
+            [
+                135,
+                70,
+                15,
+                52,
+            ],
+            crs=ccrs.PlateCarree(),
+        )
+
+        ax.coastlines(resolution="10m", linewidth=0.6)
+        ax.add_feature(cfeature.BORDERS, linewidth=0.5)
+        ax.add_feature(cfeature.LAND, alpha=0.3)
+        ax.add_feature(cfeature.OCEAN, alpha=0.2)
+
+        gl = ax.gridlines(
+            draw_labels=True,
+            linewidth=0.4,
+            color="gray",
+            alpha=0.4,
+            linestyle="--",
+        )
+
+        gl.top_labels = False
+        gl.right_labels = False
+        gl.xlabel_style = {"size": 8}
+        gl.ylabel_style = {"size": 8}
+        gl.xlocator = mticker.MaxNLocator(4)
+        gl.ylocator = mticker.MaxNLocator(4)
+
+        last_sc = ax.scatter(
+            station_info["model_lon"],
+            station_info["model_lat"],
+            c=values,
+            s=MARKER_SIZE,
+            cmap=CMAP,
+            vmin=10,
+            vmax=26,
+            edgecolor="black",
+            linewidth=0.4,
+            transform=ccrs.PlateCarree(),
+            zorder=5,
+        )
+
+        if show_names:
+            for _, row in station_info.iterrows():
+                ax.text(
+                    row["model_lon"],
+                    row["model_lat"],
+                    str(row["station"]),
+                    fontsize=5,
+                    ha="left",
+                    va="bottom",
+                    transform=ccrs.PlateCarree(),
+                    zorder=6,
+                )
+
+        ax.set_title(sector, fontsize=13, fontweight="bold")
+
+    cbar = fig.colorbar(
+        last_sc,
+        ax=axes,
+        shrink=0.93,
+        pad=0.01,extend='both'
+    )
+
+    cbar.set_label("CV (%)", fontsize=13, fontweight="bold")
+    cbar.ax.tick_params(labelsize=11)
+
+    fig.suptitle(title, fontsize=18, fontweight="bold")
+
+    fig.savefig(out_file, dpi=400, bbox_inches="tight")
+    plt.show()
     plt.close()
-
-
 def plot_for_sector(ds, station_info, sector):
     # --------------------------------------------------------
     # Whole period
@@ -506,11 +681,11 @@ def plot_for_sector(ds, station_info, sector):
     plot_station_map(
         station_info,
         vals_all,
-        title=f"O3 CV - Whole period - {sector}",
+        title=f"Coefficient of Variation  {sector} Approach 3 (%)",
         out_file=OUT_DIR / f"O3_CV_all_{sector}.png",
         show_names=SHOW_NAMES,
     )
-
+'''
     # --------------------------------------------------------
     # Day / night
     # --------------------------------------------------------
@@ -549,7 +724,7 @@ def plot_for_sector(ds, station_info, sector):
         plot_station_map(
             station_info,
             vals,
-            title=f"O3 CV - {dn} - {sector}",
+            title=f"Coefficient of Variation  {dn} {sector} Approach 3 (%)",
             out_file=OUT_DIR / f"O3_CV_{dn}_{sector}.png",
             vmin=dn_vmin,
             vmax=dn_vmax,
@@ -593,14 +768,270 @@ def plot_for_sector(ds, station_info, sector):
         plot_station_map(
             station_info,
             vals,
-            title=f"O3 CV - {season} - {sector}",
+            title=f"Coefficient of Variation {season} {sector} Approach 3 (%)",
             out_file=OUT_DIR / f"O3_CV_{season}_{sector}.png",
             vmin=season_vmin,
             vmax=season_vmax,
             show_names=SHOW_NAMES,
         )
+'''        
 
+def plot_all_sectors_together(ds, station_info):
+    sectors = SECTORS_ALL
 
+    # --------------------------------------------------------
+    # Whole period
+    # --------------------------------------------------------
+
+    all_values = {}
+
+    for sector in sectors:
+        vals = extract_station_values(
+            ds=ds,
+            station_info=station_info,
+            var_name="cv_pct_all",
+            sector=sector,
+            level_col="lev_all",
+        )
+        all_values[sector] = vals
+
+    all_concat = np.concatenate(list(all_values.values()))
+    vmin = np.nanmin(all_concat)
+    vmax = np.nanmax(all_concat)
+
+    plot_all_sectors_subplot(
+        station_info=station_info,
+        sector_values_dict=all_values,
+        title="Climatological CV (%) | all sectors | Approach 3",
+        out_file=OUT_DIR / "O3_CV_all_all_sectors.png",
+        vmin=vmin,
+        vmax=vmax,
+        show_names=SHOW_NAMES,
+    )
+    '''
+    # --------------------------------------------------------
+    # Day / night
+    # --------------------------------------------------------
+
+    daynight_all = {}
+
+    for dn in ["day", "night"]:
+        daynight_all[dn] = {}
+
+        for sector in sectors:
+            vals = extract_station_values(
+                ds=ds,
+                station_info=station_info,
+                var_name="cv_pct_daynight",
+                sector=sector,
+                day_night=dn,
+                level_col=f"lev_{dn}",
+            )
+            daynight_all[dn][sector] = vals
+
+    if USE_SAME_COLORBAR_DAYNIGHT:
+        concat = []
+        for dn in ["day", "night"]:
+            concat.extend(daynight_all[dn].values())
+
+        all_concat = np.concatenate(concat)
+        dn_vmin = np.nanmin(all_concat)
+        dn_vmax = np.nanmax(all_concat)
+    else:
+        dn_vmin = None
+        dn_vmax = None
+
+    for dn in ["day", "night"]:
+        plot_all_sectors_subplot(
+            station_info=station_info,
+            sector_values_dict=daynight_all[dn],
+            title=f"O3 CV - {dn} - all sectors",
+            out_file=OUT_DIR / f"O3_CV_{dn}_all_sectors.png",
+            vmin=dn_vmin,
+            vmax=dn_vmax,
+            show_names=SHOW_NAMES,
+        )
+
+    # --------------------------------------------------------
+    # Seasons
+    # --------------------------------------------------------
+
+    season_all = {}
+
+    for season in ["Winter", "Spring", "Summer", "Autumn"]:
+        season_all[season] = {}
+
+        for sector in sectors:
+            vals = extract_station_values(
+                ds=ds,
+                station_info=station_info,
+                var_name="cv_pct_season",
+                sector=sector,
+                season=season,
+                level_col=f"lev_{season}",
+            )
+            season_all[season][sector] = vals
+
+    if USE_SAME_COLORBAR_SEASONS:
+        concat = []
+        for season in ["Winter", "Spring", "Summer", "Autumn"]:
+            concat.extend(season_all[season].values())
+
+        all_concat = np.concatenate(concat)
+        season_vmin = np.nanmin(all_concat)
+        season_vmax = np.nanmax(all_concat)
+    else:
+        season_vmin = None
+        season_vmax = None
+
+    for season in ["Winter", "Spring", "Summer", "Autumn"]:
+        plot_all_sectors_subplot(
+            station_info=station_info,
+            sector_values_dict=season_all[season],
+            title=f"O3 CV - {season} - all sectors",
+            out_file=OUT_DIR / f"O3_CV_{season}_all_sectors.png",
+            vmin=season_vmin,
+            vmax=season_vmax,
+            show_names=SHOW_NAMES,
+        )        
+'''        
+def plot_difference_for_sectors(ds, station_info, sector_a, sector_b):
+    diff_name = f"{sector_a}_minus_{sector_b}"
+
+    # --------------------------------------------------------
+    # Whole period
+    # --------------------------------------------------------
+
+    vals_all = extract_station_difference(
+        ds=ds,
+        station_info=station_info,
+        var_name="cv_pct_all",
+        sector_a=sector_a,
+        sector_b=sector_b,
+        level_col="lev_all",
+    )
+
+    lim = np.nanmax(np.abs(vals_all))
+
+    csv_all = station_info.copy()
+    csv_all["sector_a"] = sector_a
+    csv_all["sector_b"] = sector_b
+    csv_all["cv_diff_pct"] = vals_all
+    csv_all.to_csv(
+        OUT_DIR / f"station_cv_diff_all_{diff_name}.csv",
+        index=False,
+    )
+
+    plot_station_map(
+        station_info,
+        vals_all,
+        title=f"O3 CV difference - Whole period - {sector_a} - {sector_b}",
+        out_file=OUT_DIR / f"O3_CV_diff_all_{diff_name}.png",
+        vmin=-lim,
+        vmax=lim,
+        show_names=SHOW_NAMES,
+        cmap=DIFF_CMAP,
+        cbar_label="ΔCV (%)",
+    )
+    '''
+    # --------------------------------------------------------
+    # Day / night
+    # --------------------------------------------------------
+
+    daynight_values = {}
+
+    for dn in ["day", "night"]:
+        vals = extract_station_difference(
+            ds=ds,
+            station_info=station_info,
+            var_name="cv_pct_daynight",
+            sector_a=sector_a,
+            sector_b=sector_b,
+            day_night=dn,
+            level_col=f"lev_{dn}",
+        )
+
+        daynight_values[dn] = vals
+
+        csv_dn = station_info.copy()
+        csv_dn["day_night"] = dn
+        csv_dn["sector_a"] = sector_a
+        csv_dn["sector_b"] = sector_b
+        csv_dn["cv_diff_pct"] = vals
+        csv_dn.to_csv(
+            OUT_DIR / f"station_cv_diff_{dn}_{diff_name}.csv",
+            index=False,
+        )
+
+    if USE_SAME_COLORBAR_DAYNIGHT:
+        all_vals = np.concatenate(list(daynight_values.values()))
+        lim = np.nanmax(np.abs(all_vals))
+        dn_vmin, dn_vmax = -lim, lim
+    else:
+        dn_vmin, dn_vmax = None, None
+
+    for dn, vals in daynight_values.items():
+        plot_station_map(
+            station_info,
+            vals,
+            title=f"O3 CV difference - {dn} - {sector_a} - {sector_b}",
+            out_file=OUT_DIR / f"O3_CV_diff_{dn}_{diff_name}.png",
+            vmin=dn_vmin,
+            vmax=dn_vmax,
+            show_names=SHOW_NAMES,
+            cmap=DIFF_CMAP,
+            cbar_label="ΔCV (%)",
+        )
+
+    # --------------------------------------------------------
+    # Seasons
+    # --------------------------------------------------------
+
+    season_values = {}
+
+    for season in ["Winter", "Spring", "Summer", "Autumn"]:
+        vals = extract_station_difference(
+            ds=ds,
+            station_info=station_info,
+            var_name="cv_pct_season",
+            sector_a=sector_a,
+            sector_b=sector_b,
+            season=season,
+            level_col=f"lev_{season}",
+        )
+
+        season_values[season] = vals
+
+        csv_season = station_info.copy()
+        csv_season["season"] = season
+        csv_season["sector_a"] = sector_a
+        csv_season["sector_b"] = sector_b
+        csv_season["cv_diff_pct"] = vals
+        csv_season.to_csv(
+            OUT_DIR / f"station_cv_diff_{season}_{diff_name}.csv",
+            index=False,
+        )
+
+    if USE_SAME_COLORBAR_SEASONS:
+        all_vals = np.concatenate(list(season_values.values()))
+        lim = np.nanmax(np.abs(all_vals))
+        season_vmin, season_vmax = -lim, lim
+    else:
+        season_vmin, season_vmax = None, None
+
+    for season, vals in season_values.items():
+        plot_station_map(
+            station_info,
+            vals,
+            title=f"O3 CV difference - {season} - {sector_a} - {sector_b}",
+            out_file=OUT_DIR / f"O3_CV_diff_{season}_{diff_name}.png",
+            vmin=season_vmin,
+            vmax=season_vmax,
+            show_names=SHOW_NAMES,
+            cmap=DIFF_CMAP,
+            cbar_label="ΔCV (%)",
+        )
+'''
 # ============================================================
 # MAIN
 # ============================================================
@@ -626,18 +1057,30 @@ def main():
         index=False,
     )
 
-    if PLOT_ALL_SECTORS:
-        sectors = [str(s) for s in ds["sector"].values]
+    if PLOT_SECTORS_TOGETHER:
+        print("Plotting all sectors together")
+        plot_all_sectors_together(ds, station_info)
     else:
-        sectors = [SECTOR]
+        if PLOT_ALL_SECTORS:
+         sectors = [str(s) for s in ds["sector"].values]
+        else:
+         sectors = [SECTOR]
+    
+        for sector in sectors:
+           print(f"Plotting sector {sector}")
+           plot_for_sector(ds, station_info, sector)    
 
-    for sector in sectors:
-        print(f"Plotting sector {sector}")
-        plot_for_sector(ds, station_info, sector)
+    if PLOT_DIFFERENCE:
+        print(f"Plotting difference: {DIFF_SECTOR_A} - {DIFF_SECTOR_B}")
+        plot_difference_for_sectors(
+        ds,
+        station_info,
+        sector_a=DIFF_SECTOR_A,
+        sector_b=DIFF_SECTOR_B,
+        )
+    
 
-    print(f"Saved plots to: {OUT_DIR}")
-
-
+    print('END')
 if __name__ == "__main__":
     main()
 

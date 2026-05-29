@@ -37,7 +37,7 @@ CLIM_GROUPS = [
 
 # Approaches 3 and 5 controls
 A35_SECTOR_TYPE = "CUM"               # e.g. "CUM"
-A35_SECTOR = "C10"                     # e.g. "C1"; set None to aggregate all sectors
+A35_SECTOR = "C9"                    # e.g. "C1"; set None to aggregate all sectors
 A35_AGGREGATE_OVER_SECTORS = False    # True => average over sectors per timestamp
 
 # Approach 4 controls
@@ -238,7 +238,7 @@ def plot_station_map(
         vmin=vmin,
         vmax=vmax,
         transform=ccrs.PlateCarree(),
-)
+) 
 
         if LABEL_STATIONS:
             for _, r in df_summary.iterrows():
@@ -248,7 +248,8 @@ def plot_station_map(
                 )
 
         ax.set_title(title)
-        plt.colorbar(sc, ax=ax, label=cbar_label)
+        cbar = plt.colorbar(sc, ax=ax, shrink=0.7, pad=0.03)
+        cbar.set_label(cbar_label,fontweight='bold')
 
     except Exception:
         fig, ax = plt.subplots(figsize=FIGSIZE)
@@ -274,7 +275,8 @@ def plot_station_map(
             ax.set_ylim(extent[2], extent[3])
 
         ax.set_title(title)
-        plt.colorbar(sc, ax=ax, label=cbar_label)
+        cbar = plt.colorbar(sc, ax=ax, shrink=0.7, pad=0.03)
+        cbar.set_label(cbar_label,fontweight='bold')
         ax.grid(True, alpha=0.3)
 
     fig.tight_layout()
@@ -598,7 +600,7 @@ def main():
         summary = pd.DataFrame(rows).sort_values("station").reset_index(drop=True)
         group_summaries[group_name] = summary
 
-        summary.to_csv(OUT_DIR / f"station_climatology_summary_{group_name}.csv", index=False)
+        summary.to_csv(OUT_DIR / f"station_climatology_summary_{group_name}_{A35_SECTOR}.csv", index=False)
 
     if not group_summaries:
         raise RuntimeError("No group summaries were computed")

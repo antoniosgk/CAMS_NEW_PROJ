@@ -13,7 +13,7 @@ OUT_DIR = Path("/mnt/store01/agkiokas/CAMS/station_timeseries_plots/")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # One station:
-STATIONS = ["1001A"]
+STATIONS = ["1002A"]
 
 # Multiple stations:
 #STATIONS = ["1001A", "1146A"]
@@ -22,13 +22,13 @@ STATIONS = ["1001A"]
 #STATIONS = "all"
 
 # Columns to plot
-PLOT_COLUMNS = ["center_ppb"]   
+#PLOT_COLUMNS = ["center_ppb"]   
 # Example:
-# PLOT_COLUMNS = ["center_ppb", "cv_w", "mean_w"]
+PLOT_COLUMNS = ["center_ppb", "cv_w","std_w"]
 
 # Choose sector
 # Because each timestep appears 10 times, one row per sector C1-C10
-SECTOR = "C1"
+SECTOR = "C10"
 
 # Optional filtering
 # Use None for full period
@@ -41,15 +41,16 @@ END_DATE = None
 # Plot options
 MAKE_TIMESERIES = True
 MAKE_DIURNAL_CYCLE = True
-
+MAKE_DISTRIBUTION= True
 LOCAL_TIME_OFFSET_HOURS = 8
-SECTOR_DEPENDENT_COLUMNS = ["cv_w","mean_w"]
+SECTOR_DEPENDENT_COLUMNS = ["cv_w","mean_w","std_w"]
 
 error_mode="shade" # 'shade',or 'boxplot'
 error_type='std' #'std','iqr'
 FIGSIZE = (13, 5)
 DPI = 150
 
+plot_mode="both"  #for distribution kde,hist,both
 
 # ============================================================
 # HELPERS
@@ -213,7 +214,139 @@ def plot_timeseries(df, station, column, sector, out_dir, time_label):
     print(f"Saved: {out_file}")
     
 
+def plot_distribution(
+    df,
+    station,
+    column,
+    sector,
+    out_dir,
+    time_label,
+    plot_mode="both",      # "hist", "kde", "both"
+    bins=40,
+    density=True,
+    log_y=False,
+):
+    """
+    Distribution plot for a column.
 
+    plot_mode:
+        "hist"  -> histogram only
+        "kde"   -> KDE only
+        "both"  -> histogram + KDE
+
+    density:
+        True  -> probability density
+        False -> counts
+    """
+
+    if column not in df.columns:
+        print(f"Skipping {station} {column}: column not found")
+        return
+
+    plot_df = df[[column]].dropna().copy()
+
+    if plot_df.empty:
+        print(f"Skipping {station} {column}: no data")
+        return
+
+    vals = plot_df[column].values
+
+    plt.figure(figsize=FIGSIZE)
+
+    # ========================================================
+    # HISTOGRAM
+    # ========================================================
+
+    if plot_mode in ["hist", "both"]:
+
+        plt.hist(
+            vals,
+            bins=bins,
+            density=density,
+            alpha=0.5 if plot_mode == "both" else 0.8,
+            edgecolor="black",
+            linewidth=0.5,
+            label="Histogram",
+        )
+
+    # ========================================================
+    # KDE
+    # ========================================================
+
+    if plot_mode in ["kde", "both"]:
+
+        kde = pd.Series(vals).plot.kde(
+            bw_method="scott",
+            linewidth=2,
+            label="KDE",
+        )
+
+    # ========================================================
+    # STATISTICS
+    # ========================================================
+
+    mean_val = np.nanmean(vals)
+    median_val = np.nanmedian(vals)
+    std_val = np.nanstd(vals)
+
+    plt.axvline(
+        mean_val,
+        linestyle="--",
+        linewidth=1.5,
+        label=f"Mean = {mean_val:.2f}"
+    )
+
+    plt.axvline(
+        median_val,
+        linestyle=":",
+        linewidth=1.5,
+        label=f"Median = {median_val:.2f}"
+    )
+
+    # ========================================================
+    # LABELS
+    # ========================================================
+
+    plt.title(
+        f"{station} - {column} distribution"
+        f"{title_sector_part(column, sector)} - {time_label}"
+    )
+
+    plt.xlabel(column)
+
+    if density:
+        plt.ylabel("Density")
+    else:
+        plt.ylabel("Counts")
+
+    if log_y:
+        plt.yscale("log")
+
+    plt.grid(True, alpha=0.3)
+
+    plt.legend(
+        title=f"std = {std_val:.2f}",
+        fontsize=9
+    )
+
+    plt.tight_layout()
+
+    # ========================================================
+    # SAVE
+    # ========================================================
+
+    out_file = (
+        out_dir
+        / f"{station}"
+          f"{filename_sector_part(column, sector)}"
+          f"_{column}_distribution_{plot_mode}_{time_label}.png"
+    )
+
+    plt.savefig(out_file, dpi=DPI)
+    plt.show()
+
+    print(f"Saved: {out_file}")
+    
 def plot_diurnal_cycle(
     df,
     station,
@@ -372,8 +505,10 @@ def main():
 
             if MAKE_DIURNAL_CYCLE:
                 plot_diurnal_cycle(df, station, column, SECTOR, OUT_DIR, time_label)
-
-
+            
+            if MAKE_DISTRIBUTION:
+                plot_distribution(df, station, column, SECTOR, OUT_DIR, time_label,plot_mode)
+       
 if __name__ == "__main__":
     main()
 # %%
