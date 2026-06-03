@@ -565,7 +565,7 @@ def plot_all_sectors_subplot(
 
     if SUBPLOT_LAYOUT == "2x5":
         nrows, ncols = 2, 5
-        figsize = (22, 9)
+        figsize = (14, 8)
     else:
         nrows, ncols = 5, 2
         figsize = (8, 14)
