@@ -431,6 +431,7 @@ def plot_all_sectors_subplot(
         import cartopy.crs as ccrs
         import cartopy.feature as cfeature
         import matplotlib.ticker as mticker
+        import matplotlib.pyplot as plt
 
         projection = ccrs.PlateCarree()
 
@@ -441,12 +442,18 @@ def plot_all_sectors_subplot(
             nrows, ncols = 5, 2
             figsize = (8, 14)
 
+        # ------------------------------------------------------------
+        # Colormap settings
+        # ------------------------------------------------------------
+        cmap = plt.colormaps["jet"].copy()
+        cmap.set_over("magenta")   # values > vmax will appear magenta
+
         fig, axes = plt.subplots(
             nrows=nrows,
             ncols=ncols,
             figsize=figsize,
             subplot_kw={"projection": projection},
-            constrained_layout=True,
+            constrained_layout=False,
         )
 
         axes = axes.ravel()
@@ -471,6 +478,7 @@ def plot_all_sectors_subplot(
                 alpha=0.4,
                 linestyle="--",
             )
+
             gl.top_labels = False
             gl.right_labels = False
             gl.xlabel_style = {"size": 8}
@@ -482,8 +490,8 @@ def plot_all_sectors_subplot(
                 sub["lon"],
                 sub["lat"],
                 c=sub[metric_col],
-                cmap="inferno",
-                s=50,
+                cmap=cmap,
+                s=10,
                 edgecolor="k",
                 linewidth=0.4,
                 vmin=vmin,
@@ -494,16 +502,39 @@ def plot_all_sectors_subplot(
 
             ax.set_title(sector, fontsize=13, fontweight="bold")
 
+        fig.suptitle(title, fontsize=18, fontweight="bold")
+
+        # ------------------------------------------------------------
+        # Manual subplot spacing
+        # ------------------------------------------------------------
+        fig.subplots_adjust(
+            left=0.04,
+            right=0.92,
+            bottom=0.05,
+            top=0.92,
+            wspace=0.01,
+            hspace=0.5,
+        )
+
+        # ------------------------------------------------------------
+        # Manual colorbar position
+        # [left, bottom, width, height]
+        #
+        # width  -> colorbar thickness
+        # height -> colorbar length
+        # left   -> move left/right
+        # bottom -> move up/down
+        # ------------------------------------------------------------
+        cbar_ax = fig.add_axes([0.93, 0.05, 0.02, 0.87])
+
         cbar = fig.colorbar(
             last_sc,
-            ax=axes,
-            shrink=0.93,
-            pad=0.01,extend='both',fraction=0.2
+            cax=cbar_ax,
+            extend="max",
         )
+
         cbar.set_label(cbar_label, fontsize=13, fontweight="bold")
         cbar.ax.tick_params(labelsize=11)
-
-        fig.suptitle(title, fontsize=18, fontweight="bold")
 
         if outfile is not None:
             fig.savefig(outfile, dpi=400, bbox_inches="tight")
@@ -511,7 +542,7 @@ def plot_all_sectors_subplot(
         plt.show()
 
     except Exception as e:
-        print(f"Could not create subplot map: {e}")    
+        print(f"Could not create subplot map: {e}")  
 
 def compute_summary_for_context(clim_kind, season_name=None, day_night_name=None):
     ds_clim, da_clim, lat2d, lon2d = open_climatology_field_for_context(
@@ -633,8 +664,8 @@ def main():
             metric_col="cv_pct",
             title=title,
             cbar_label="CV (%)",
-            vmin=0.2,
-            vmax=4,
+            vmin=0,
+            vmax=2,
             outfile=outfile,
         )
 

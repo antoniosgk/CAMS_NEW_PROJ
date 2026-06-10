@@ -35,15 +35,15 @@ plt.rcParams['font.weight'] = 'bold'
 FIGSIZE = (20, 10)
 DPI = 400
 
-CMAP = "inferno"
+CMAP = "jet"
 
-DOT_SIZE = 50
+DOT_SIZE = 10
 DOT_EDGE_COLOR = "black"
 DOT_EDGE_WIDTH = 0.4
 
 # Optional manual limits
-VMIN = 0.5
-VMAX = 5
+VMIN = 0
+VMAX = 3
 
 # ============================================================
 # TITLE SETTINGS
@@ -115,12 +115,18 @@ def plot_all_sectors_subplot(sector_data, out_file):
         nrows, ncols = 5, 2
         figsize = (8, 14)
 
+    # Custom colormap:
+    # normal colors: jet
+    # values above vmax: magenta
+    cmap = plt.colormaps["jet"].copy()
+    cmap.set_over("magenta")
+
     fig, axes = plt.subplots(
         nrows=nrows,
         ncols=ncols,
         figsize=figsize,
         subplot_kw={"projection": ccrs.PlateCarree()},
-        constrained_layout=True,
+        constrained_layout=False,
     )
 
     axes = axes.ravel()
@@ -141,7 +147,11 @@ def plot_all_sectors_subplot(sector_data, out_file):
         df = sector_data.get(sector)
 
         if df is None or df.empty:
-            ax.set_title(f"{sector} - no data", fontsize=TITLE_SIZE, fontweight=TITLE_WEIGHT)
+            ax.set_title(
+                f"{sector} - no data",
+                fontsize=TITLE_SIZE,
+                fontweight=TITLE_WEIGHT
+            )
             continue
 
         gl = ax.gridlines(
@@ -180,7 +190,7 @@ def plot_all_sectors_subplot(sector_data, out_file):
             df[LON_COL],
             df[LAT_COL],
             c=df[VALUE_COL],
-            cmap=CMAP,
+            cmap=cmap,
             norm=norm,
             s=DOT_SIZE,
             edgecolor=DOT_EDGE_COLOR,
@@ -207,12 +217,29 @@ def plot_all_sectors_subplot(sector_data, out_file):
             fontweight=TITLE_WEIGHT
         )
 
+    fig.suptitle(
+        f"Climatological CV (%) | all sectors | Approach 2 ",
+        fontsize=TITLE_SIZE + 4,
+        fontweight=TITLE_WEIGHT
+    )
+
+    # Manual subplot spacing - same as first script
+    fig.subplots_adjust(
+        left=0.04,
+        right=0.92,
+        bottom=0.05,
+        top=0.92,
+        wspace=0.01,
+        hspace=0.5,
+    )
+
+    # Manual colorbar position - same as first script
+    cbar_ax = fig.add_axes([0.93, 0.05, 0.02, 0.87])
+
     cbar = fig.colorbar(
         last_sc,
-        ax=axes,
-        shrink=0.93,
-        pad=0.01,
-        extend="both"
+        cax=cbar_ax,
+        extend="max"
     )
 
     cbar.set_label(
@@ -222,12 +249,6 @@ def plot_all_sectors_subplot(sector_data, out_file):
     )
 
     cbar.ax.tick_params(labelsize=CBAR_TICK_SIZE)
-
-    fig.suptitle(
-        f"Climatological CV (%) | all sectors | Approach 2 ",
-        fontsize=TITLE_SIZE + 4,
-        fontweight=TITLE_WEIGHT
-    )
 
     out_file.parent.mkdir(parents=True, exist_ok=True)
 

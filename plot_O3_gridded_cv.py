@@ -26,7 +26,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 SECTOR = "C10"             # C0 ... C10
 PLOT_ALL_SECTORS = False   # True if you want plots for all C1-C10
 
-PLOT_SECTORS_TOGETHER = False  # True -> one subplot figure with all sectors
+PLOT_SECTORS_TOGETHER = True  # True -> one subplot figure with all sectors
 SUBPLOT_LAYOUT = "5x2"         # "2x5" or "5x2"
 
 SECTORS_ALL = [f"C{i}" for i in range(1, 11)]
@@ -35,10 +35,10 @@ SHOW_NAMES = False
 USE_SAME_COLORBAR_DAYNIGHT = True
 USE_SAME_COLORBAR_SEASONS = True
 
-MARKER_SIZE = 50
+MARKER_SIZE = 10
 FIGSIZE = (20, 10)
 CMAP = "inferno"
-PLOT_DIFFERENCE = True
+PLOT_DIFFERENCE = False
 
 DIFF_SECTOR_A = "C10"
 DIFF_SECTOR_B = "C0"
@@ -570,12 +570,19 @@ def plot_all_sectors_subplot(
         nrows, ncols = 5, 2
         figsize = (8, 14)
 
+    # Custom colormap:
+    # normal colors: jet
+    # values above vmax: magenta
+    cmap = plt.colormaps["jet"].copy()
+    cmap.set_over("magenta")
+    cmap.set_under('black')
+
     fig, axes = plt.subplots(
         nrows=nrows,
         ncols=ncols,
         figsize=figsize,
         subplot_kw={"projection": ccrs.PlateCarree()},
-        constrained_layout=True,
+        constrained_layout=False,
     )
 
     axes = axes.ravel()
@@ -620,9 +627,9 @@ def plot_all_sectors_subplot(
             station_info["model_lat"],
             c=values,
             s=MARKER_SIZE,
-            cmap=CMAP,
+            cmap=cmap,
             vmin=10,
-            vmax=26,
+            vmax=25 ,
             edgecolor="black",
             linewidth=0.4,
             transform=ccrs.PlateCarree(),
@@ -644,21 +651,33 @@ def plot_all_sectors_subplot(
 
         ax.set_title(sector, fontsize=13, fontweight="bold")
 
+    fig.suptitle(title, fontsize=18, fontweight="bold")
+
+    # Manual subplot spacing - same as first script
+    fig.subplots_adjust(
+        left=0.04,
+        right=0.92,
+        bottom=0.05,
+        top=0.92,
+        wspace=0.01,
+        hspace=0.5,
+    )
+
+    # Manual colorbar position - same as first script
+    cbar_ax = fig.add_axes([0.93, 0.05, 0.02, 0.87])
+
     cbar = fig.colorbar(
         last_sc,
-        ax=axes,
-        shrink=0.93,
-        pad=0.01,extend='both'
+        cax=cbar_ax,
+        extend="both"
     )
 
     cbar.set_label("CV (%)", fontsize=13, fontweight="bold")
     cbar.ax.tick_params(labelsize=11)
 
-    fig.suptitle(title, fontsize=18, fontweight="bold")
-
     fig.savefig(out_file, dpi=400, bbox_inches="tight")
     plt.show()
-    plt.close()
+    #plt.close()
 def plot_for_sector(ds, station_info, sector):
     # --------------------------------------------------------
     # Whole period
