@@ -32,8 +32,8 @@ STATIONS = [
 
 # Used only if SELECTION_MODE = "idx_range"
 IDX_COL = "station_idx"
-IDX_MIN = 1
-IDX_MAX = 100   # inclusive
+IDX_MIN = 1101
+IDX_MAX = 1300   # inclusive
 
 # If True, existing CSV files will be overwritten
 OVERWRITE = True
@@ -148,21 +148,26 @@ def fit_quadratic(x, y):
 
 def exponential_model(x, a, b, c):
     """
-    Exponential relationship:
+    Safer exponential model:
 
         y = a + b * exp(c*x)
+
+    np.clip prevents overflow during curve fitting.
     """
-    return a + b * np.exp(c * x)
+    z = np.clip(c * x, -50, 50)
+    return a + b * np.exp(z)
 
 
 def fit_exponential(x, y):
     """
     Fit y = a + b*exp(c*x).
-    Returns a, b, c, r2.
 
-    Some timesteps may fail, especially if the sector profile is almost flat.
-    In that case, NaN values are returned.
+    Safer version:
+    - clips the exponential internally,
+    - bounds c to avoid extreme growth/decay,
+    - returns NaN if the fit is unstable.
     """
+
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
 
@@ -174,20 +179,46 @@ def fit_exponential(x, y):
     x_fit = x[valid]
     y_fit = y[valid]
 
+    # If y is almost constant, exponential fitting is not meaningful
+    if np.nanstd(y_fit) < 1e-12:
+        return {"a": np.nan, "b": np.nan, "c": np.nan, "r2": np.nan}
+
     try:
-        a0 = np.nanmean(y_fit)
-        b0 = y_fit[0] - a0
-        c0 = 0.01
+        y_mean = np.nanmean(y_fit)
+        y_range = np.nanmax(y_fit) - np.nanmin(y_fit)
+
+        if not np.isfinite(y_range) or y_range == 0:
+            return {"a": np.nan, "b": np.nan, "c": np.nan, "r2": np.nan}
+
+        # Initial guesses
+        a0 = y_mean
+        b0 = y_fit[0] - y_mean
+        c0 = 0.0
+
+        # Bounds to prevent extreme exponentials
+        lower_bounds = [
+            np.nanmin(y_fit) - 10 * y_range,   # a lower
+            -10 * y_range,                     # b lower
+            -1.0,                              # c lower
+        ]
+
+        upper_bounds = [
+            np.nanmax(y_fit) + 10 * y_range,   # a upper
+            10 * y_range,                      # b upper
+            1.0,                               # c upper
+        ]
 
         popt, _ = curve_fit(
             exponential_model,
             x_fit,
             y_fit,
             p0=[a0, b0, c0],
-            maxfev=10000,
+            bounds=(lower_bounds, upper_bounds),
+            maxfev=3000,
         )
 
         a, b, c = popt
+
         y_pred = exponential_model(x_fit, a, b, c)
 
         return {
