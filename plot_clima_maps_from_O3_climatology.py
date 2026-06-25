@@ -656,7 +656,7 @@ def main():
         suffix = summary["context"].iloc[0]
 
         if PLOT_SECTORS_TOGETHER:
-           title = f"Climatological CV (%) | all sectors | Approach 1"
+           title = f"Climatological CV (%) | all sectors | SR 1"
            outfile = OUT_DIR / f"map_cv_all_sectors_{suffix} {SUBPLOT_LAYOUT}.png"
 
            plot_all_sectors_subplot(

@@ -1,10 +1,10 @@
-
 #%%
 from pathlib import Path
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+import matplotlib.ticker as mticker
 import time
 import datetime as dt
 
@@ -48,7 +48,7 @@ END_DATE = "2005-06-20"
 #   "one"       -> use R2_STATIONS
 #   "selected"  -> use R2_STATIONS
 #   "all"       -> use all CSV files matching CSV_PATTERN in CSV_DIR
-R2_MODE = "selected"
+R2_MODE = "all"
 
 R2_STATIONS = ["1002A", "1003A", "1004A"]
 
@@ -174,10 +174,56 @@ def get_datetime_column(df):
     return df
 
 
-def load_station_csv(csv_file):
+def _cols_for_distribution(csv_file):
+    """
+    Return the minimal set of columns needed for distribution/AIC plots.
+
+    Keeps:
+      - the datetime column
+      - all *_r2, *_adj_r2, *_aic, *_bic, *_n, *_rss columns
+      - all *_best_model_aic and *_delta_aic columns
+      - only for variables ratio and cv_w (mean_w, std_w, median_w not needed)
+
+    Drops (not needed for histograms/CDFs/bar charts):
+      - wide sector columns  {var}_C1 ... {var}_C10
+      - coefficient columns  {var}_{model}_a / _b / _c
+      - metadata columns (coordinates, k_star, etc.)
+
+    Typically reduces per-file memory by 60-75%.
+    """
+    header = pd.read_csv(csv_file, nrows=0)
+    all_cols = list(header.columns)
+
+    keep_suffixes = (
+        "_r2", "_adj_r2", "_aic", "_bic", "_n", "_rss",
+        "_delta_aic", "_best_model_aic", "_r2_check",
+    )
+
+    selected = []
+    for c in all_cols:
+        if c in ("datetime", "timestamp", "time_key"):
+            selected.append(c)
+            continue
+        if any(c.endswith(s) for s in keep_suffixes):
+            selected.append(c)
+
+    # Distribution plots only use ratio and cv_w.
+    # Drop metric columns for mean_w, std_w, median_w to save RAM.
+    DIST_VARS = ("ratio", "cv_w")
+    selected = [c for c in selected
+                if c in ("datetime", "timestamp", "time_key")
+                or any(c.startswith(v + "_") for v in DIST_VARS)]
+
+    return selected if selected else None  # None -> read all (fallback)
+
+
+# BUG FIX 1: restored usecols parameter to load_station_csv
+def load_station_csv(csv_file, usecols=None):
     station_id = station_id_from_csv(csv_file)
 
-    df = pd.read_csv(csv_file)
+    # BUG FIX 1: pass usecols to pd.read_csv so excluded columns
+    # are never read from disk
+    df = pd.read_csv(csv_file, usecols=usecols)
     df = get_datetime_column(df)
 
     df = df.dropna(subset=["plot_datetime"]).copy()
@@ -193,20 +239,41 @@ def load_station_csv(csv_file):
     return df
 
 
-def load_multiple_station_csvs(csv_files):
+# BUG FIX 4: restored total_rows counter and RAM report
+def load_multiple_station_csvs(csv_files, usecols=None):
+    """
+    Load and concatenate multiple station CSVs.
+
+    Parameters
+    ----------
+    usecols : "distribution", list of str, or None
+        "distribution" -> load only the fit-metric columns needed for
+            R2/AIC distribution and best-model plots (~60-75% less RAM).
+        list of str    -> load exactly those columns.
+        None           -> load all columns (required for time-series plots).
+    """
     dfs = []
+    total_rows = 0
+
     for f in csv_files:
         try:
-            df = load_station_csv(f)
+            cols = _cols_for_distribution(f) if usecols == "distribution" else usecols
+            df = load_station_csv(f, usecols=cols)
+            total_rows += len(df)
             dfs.append(df)
-            print(f"Loaded {f.name}: {len(df):,} rows")
+            print(f"  Loaded {f.name}: {len(df):,} rows, "
+                  f"{len(df.columns)} cols")
         except Exception as e:
             print(f"[WARNING] Could not load {f.name}: {e}")
 
     if len(dfs) == 0:
         raise ValueError("No valid CSV files loaded.")
 
-    return pd.concat(dfs, ignore_index=True)
+    out = pd.concat(dfs, ignore_index=True)
+    print(f"  --> Combined: {total_rows:,} rows, "
+          f"{len(out.columns)} cols, "
+          f"~{out.memory_usage(deep=True).sum() / 1e6:.1f} MB in RAM")
+    return out
 
 
 def nice_time_axis(ax):
@@ -253,18 +320,24 @@ PARAMETER_SPECS = {
             "Linear b": "ratio_linear_b",
             "Quadratic c": "ratio_quadratic_c",
             "Exponential c": "ratio_exponential_c",
+            "Exponential a·b": ("ratio_exponential_a", "ratio_exponential_b"),
+            "Exponential b·c": ("ratio_exponential_b", "ratio_exponential_c"),
+            "Exponential b":"ratio_exponential_b",
         },
     },
     "cv_w": {
-        "title": "Weighted CV",
+        "title": "CV",
         "ylabel": "Shape parameter value",
         "columns": {
             "Linear b": "cv_w_linear_b",
             "Quadratic c": "cv_w_quadratic_c",
             "Exponential c": "cv_w_exponential_c",
+            "Exponential a·b": ("cv_w_exponential_a", "cv_w_exponential_b"),
+            "Exponential b·c": ("cv_w_exponential_b", "cv_w_exponential_c"),
+            "Exponential b":"cv_w_exponential_b",
         },
         "scale": 100,
-        "scaled_ylabel": "Shape parameter value, CV (%)",
+        "scaled_ylabel": "Shape parameter value, CV(%)",
     },
     "mean_w": {
         "title": "Weighted sector mean concentration",
@@ -273,6 +346,9 @@ PARAMETER_SPECS = {
             "Linear b": "mean_w_linear_b",
             "Quadratic c": "mean_w_quadratic_c",
             "Exponential c": "mean_w_exponential_c",
+            "Exponential a·b": ("mean_w_exponential_a", "mean_w_exponential_b"),
+            "Exponential b·c": ("mean_w_exponential_b", "mean_w_exponential_c"),
+            "Exponential b": "mean_w_exponential_b",
         },
     },
 }
@@ -282,7 +358,18 @@ MODELS = ["linear", "quadratic", "exponential"]
 MODEL_LABELS = {"linear": "Linear", "quadratic": "Quadratic", "exponential": "Exponential"}
 MODEL_COLORS = {"linear": "#1f77b4", "quadratic": "#ff7f0e", "exponential": "#2ca02c"}
 
+def _resolve_series(df, col_spec, scale=1):
+    """
+    Resolve a column spec to a pandas Series, applying scale.
 
+    col_spec can be:
+      - a string  -> direct column lookup
+      - a tuple of two strings -> element-wise product of the two columns
+    """
+    if isinstance(col_spec, tuple):
+        col_a, col_b = col_spec
+        return df[col_a] * df[col_b] * scale
+    return df[col_spec] * scale
 # ============================================================
 # 1) TIME SERIES OF SHAPE PARAMETERS
 # ============================================================
@@ -291,15 +378,21 @@ def plot_parameter_timeseries_for_variable_one_station(df, variable_key):
     spec = PARAMETER_SPECS[variable_key]
     station_id = df["station_id"].iloc[0]
 
-    cols = list(spec["columns"].values())
+    cols = []
+    for v in spec["columns"].values():
+        if isinstance(v, tuple):
+            cols.extend(v)
+        else:
+            cols.append(v)
     require_columns(df, cols)
 
     scale = spec.get("scale", 1)
 
     fig, ax = plt.subplots(figsize=(14, 6))
 
-    for label, col in spec["columns"].items():
-        ax.plot(df["plot_datetime"], df[col] * scale, linewidth=1.1, label=label)
+    for label, col_spec in spec["columns"].items():
+        ax.plot(df["plot_datetime"], _resolve_series(df, col_spec, scale),
+            linewidth=1.1, label=label)
 
     ax.axhline(0, linestyle="--", linewidth=1.4)
     ax.set_xlabel("Time")
@@ -312,22 +405,30 @@ def plot_parameter_timeseries_for_variable_one_station(df, variable_key):
     ax.set_title(f"{SPECIES} {spec['title']} fitted parameter time series | {station_id}")
     nice_time_axis(ax)
     ax.legend(frameon=True)
-    plt.show()
     savefig(f"{station_id}_{variable_key}_parameter_timeseries.png")
 
 
 def plot_parameter_timeseries_for_variable_multiple_stations(df_all, variable_key):
     spec = PARAMETER_SPECS[variable_key]
-    cols = list(spec["columns"].values())
+
+    # handle both plain column names and tuple (product) specs
+    cols = []
+    for v in spec["columns"].values():
+        if isinstance(v, tuple):
+            cols.extend(v)
+        else:
+            cols.append(v)
     require_columns(df_all, cols)
 
     scale = spec.get("scale", 1)
 
-    for parameter_label, col in spec["columns"].items():
+    for parameter_label, col_spec in spec["columns"].items():
         fig, ax = plt.subplots(figsize=(14, 6))
 
         for station_id, g in df_all.groupby("station_id"):
-            ax.plot(g["plot_datetime"], g[col] * scale, linewidth=1.0, alpha=0.85, label=station_id)
+            ax.plot(g["plot_datetime"],
+                    _resolve_series(g, col_spec, scale),
+                    linewidth=1.0, alpha=0.85, label=station_id)
 
         ax.axhline(0, linestyle="--", linewidth=1.4)
         ax.set_xlabel("Time")
@@ -340,8 +441,8 @@ def plot_parameter_timeseries_for_variable_multiple_stations(df_all, variable_ke
         ax.set_title(f"{SPECIES} {spec['title']} | {parameter_label} time series")
         nice_time_axis(ax)
         ax.legend(frameon=True, ncol=2)
-        plt.show()
-        safe_param = parameter_label.lower().replace(" ", "_")
+
+        safe_param = parameter_label.lower().replace(" ", "_").replace("·", "x")
         savefig(f"multi_station_{variable_key}_{safe_param}_timeseries.png")
 
 
@@ -351,7 +452,7 @@ def run_parameter_timeseries_plots():
         print("[WARNING] No CSV files found for TIMESERIES_STATIONS.")
         return
 
-    df_all = load_multiple_station_csvs(csv_files)
+    df_all = load_multiple_station_csvs(csv_files, usecols=None)  # full load: coefficients needed
 
     if PLOT_STATIONS_TOGETHER:
         for variable_key in ["ratio", "cv_w", "mean_w"]:
@@ -440,9 +541,9 @@ def plot_metric_distribution_for_variable(df_all, variable_key, metric_suffix):
     ax.set_xlabel("Fitted model")
     ax.set_ylabel(metric_label)
     ax.set_title(f"Distribution of {title_name} fit quality "
-                 f"({metric_label}) | {R2_MODE} station set | n≥{MIN_N_SECTORS}")
+                 f"({metric_label}) | {R2_MODE} station set")
     ax.legend(frameon=True)
-    plt.show()
+
     savefig(f"{metric_suffix}_distribution_{variable_key}_{R2_MODE}.png")
 
 
@@ -483,7 +584,7 @@ def plot_metric_histogram_for_variable(df_all, variable_key, metric_suffix):
     ax.set_title(f"Histogram of {title_name} {metric_label} "
                  f"| {R2_MODE} station set")
     ax.legend(frameon=True)
-    plt.show()
+
     savefig(f"{metric_suffix}_percentage_histogram_{variable_key}_{R2_MODE}.png")
 
 
@@ -494,23 +595,14 @@ def plot_metric_histogram_for_variable(df_all, variable_key, metric_suffix):
 def _best_model_per_row(df, variable_key):
     """
     Determine the best (lowest-AIC) model per timestep.
-
-    Prefers the precomputed {var}_best_model_aic column from the backfill.
-    Falls back to computing argmin over the three {var}_{model}_aic columns.
-    Returns a pandas Series of model names (or NaN), already n-filtered:
-    a model only competes for a row if that row passed its own n filter.
+    Returns a pandas Series of model names (or NaN), already n-filtered.
     """
-    best_col = f"{variable_key}_best_model_aic"
-
     aic_cols = {m: f"{variable_key}_{m}_aic" for m in MODELS}
     have_aic = all(c in df.columns for c in aic_cols.values())
 
     if not have_aic:
-        # No AIC info at all -> cannot determine best model.
         return None
 
-    # Build an AIC frame, masking out fits that fail the n threshold so a
-    # degenerate low-n fit cannot win.
     aic_frame = pd.DataFrame(index=df.index)
     for m in MODELS:
         col = aic_cols[m]
@@ -522,10 +614,6 @@ def _best_model_per_row(df, variable_key):
     valid_any = aic_frame.notna().any(axis=1)
     best = pd.Series(index=df.index, dtype=object)
     best[valid_any] = aic_frame.loc[valid_any].idxmin(axis=1)
-
-    # If the precomputed column exists and we did NOT need to re-mask
-    # (i.e. no n filtering changed anything), it should agree; we use the
-    # recomputed, n-filtered version to honor MIN_N_SECTORS consistently.
     return best
 
 
@@ -558,7 +646,7 @@ def plot_best_model_bar_for_variable(df_all, variable_key):
 
     for bar, h, p in zip(bars, heights, pct):
         ax.text(bar.get_x() + bar.get_width() / 2, p + 0.8,
-                f"{p:.1f}%\n(n={h:,})", ha="center", va="bottom",
+                f"{p:.1f}%", ha="center", va="bottom",
                 fontsize=11, fontweight="bold")
 
     ax.set_ylim(0, max(pct) * 1.18 if max(pct) > 0 else 1)
@@ -566,8 +654,156 @@ def plot_best_model_bar_for_variable(df_all, variable_key):
     ax.set_xlabel("Fitted model (lowest AIC)")
     ax.set_title(f"Best-fit model for {title_name} by AIC\n"
                  f"all stations, all timesteps | {R2_MODE}")
-    plt.show()
+
     savefig(f"best_model_aic_barchart_{variable_key}_{R2_MODE}.png")
+
+
+def plot_reversed_cdf_for_variable(df_all, variable_key, metric_suffix):
+    """
+    Approach B — Reversed (survival) CDF.
+
+    y-axis: percentage of fits where metric >= threshold.
+    Reads as: "X% of all timestep fits achieved at least R²=0.9."
+    """
+    cols = _metric_columns(variable_key, metric_suffix)
+    have = [c for c in cols.values() if c in df_all.columns]
+    if not have:
+        print(f"[INFO] No {metric_suffix} columns for {variable_key}; skipping reversed CDF.")
+        return
+
+    title_name   = _r2_title_name(variable_key)
+    metric_label = r"$R^2$" if metric_suffix == "r2" else r"adjusted $R^2$"
+
+    x_lo = -0.5 if metric_suffix == "adj_r2" else 0.0
+    thresh = np.linspace(x_lo, 1.0, 1000)
+
+    LSTYLES = {"linear": "-", "quadratic": "--", "exponential": ":"}
+
+    fig, ax = plt.subplots(figsize=(11, 6))
+
+    for m in MODELS:
+        col = cols[m]
+        if col not in df_all.columns:
+            continue
+        mask = filter_by_n(df_all, variable_key, m)
+        vals = clean_series(df_all.loc[mask, col])
+        if len(vals) == 0:
+            continue
+
+        frac = np.array([(vals >= t).mean() * 100.0 for t in thresh])
+
+        # BUG FIX 3: restored missing closing parenthesis in label
+        ax.plot(thresh, frac,
+                color=MODEL_COLORS[m],
+                linewidth=2.2,
+                linestyle=LSTYLES[m],
+                label=f"{MODEL_LABELS[m]}  (mean={vals.mean():.3f})")
+
+    ref_lines = [0.80, 0.90, 0.95]
+    for xref in ref_lines:
+        ax.axvline(xref, color="grey", linewidth=0.9, linestyle="--", alpha=0.6)
+        ax.text(xref + 0.004, 97, f"{int(xref*100)}%",
+                fontsize=9, color="grey", va="top", ha="left")
+
+    ax.set_xlim(x_lo, 1.0)
+    ax.set_ylim(0, 101)
+    ax.xaxis.set_major_locator(mticker.MultipleLocator(0.1))
+    ax.xaxis.set_minor_locator(mticker.MultipleLocator(0.05))
+    ax.set_xlabel(f"{metric_label} threshold", fontsize=LABEL_SIZE)
+    ax.set_ylabel(f"% of fits with {metric_label} ≥ threshold", fontsize=LABEL_SIZE)
+    ax.set_title(
+        f"{SPECIES} {title_name} {metric_label} — survival curve\n"
+        f"{R2_MODE} station set",
+        fontsize=TITLE_SIZE,
+    )
+    ax.legend(fontsize=LEGEND_SIZE, frameon=True)
+    ax.grid(alpha=0.25)
+
+    savefig(f"survival_cdf_{metric_suffix}_{variable_key}_{R2_MODE}.png")
+
+
+def plot_dual_panel_histogram_for_variable(df_all, variable_key, metric_suffix):
+    """
+    Approach C — Dual-panel histogram: full range (left) + tail zoom (right).
+
+    Left panel: shows the full picture including any low-R² tail.
+    Right panel: resolves fine structure inside the high-quality region.
+    """
+    cols = _metric_columns(variable_key, metric_suffix)
+    have = [c for c in cols.values() if c in df_all.columns]
+    if not have:
+        print(f"[INFO] No {metric_suffix} columns for {variable_key}; skipping dual-panel.")
+        return
+
+    title_name   = _r2_title_name(variable_key)
+    metric_label = r"$R^2$" if metric_suffix == "r2" else r"adjusted $R^2$"
+
+    x_lo      = -0.5 if metric_suffix == "adj_r2" else 0.0
+    zoom_lo   = 0.80
+    bins_full = np.linspace(x_lo, 1.0, 26)
+    bins_zoom = np.linspace(zoom_lo, 1.0, 41)
+
+    fig, (ax1, ax2) = plt.subplots(
+        1, 2, figsize=(15, 6),
+        gridspec_kw={"width_ratios": [1, 1.6]},
+    )
+
+    for m in MODELS:
+        col = cols[m]
+        if col not in df_all.columns:
+            continue
+        mask = filter_by_n(df_all, variable_key, m)
+        vals = clean_series(df_all.loc[mask, col])
+        if len(vals) == 0:
+            continue
+
+        color  = MODEL_COLORS[m]
+        w_full = np.ones(len(vals)) * 100.0 / len(vals)
+
+        ax1.hist(vals, bins=bins_full, weights=w_full,
+                 histtype="stepfilled", color=color, alpha=0.28, linewidth=0)
+        ax1.hist(vals, bins=bins_full, weights=w_full,
+                 histtype="step", color=color, linewidth=2.0,
+                 label=MODEL_LABELS[m])
+
+        vals_z = vals[vals >= zoom_lo]
+        if len(vals_z) == 0:
+            continue
+        pct_in_zoom = 100.0 * len(vals_z) / len(vals)
+        w_zoom = np.ones(len(vals_z)) * 100.0 / len(vals_z)
+
+        ax2.hist(vals_z, bins=bins_zoom, weights=w_zoom,
+                 histtype="stepfilled", color=color, alpha=0.28, linewidth=0)
+        ax2.hist(vals_z, bins=bins_zoom, weights=w_zoom,
+                 histtype="step", color=color, linewidth=2.0,
+                 label=(f"{MODEL_LABELS[m]}\n"
+                        f"mean={vals.mean():.3f}\n"
+                        f"≥{int(zoom_lo*100)}%: {pct_in_zoom:.1f}% of fits"))
+
+    for ax, title_sfx in [
+        (ax1, "full range (−0.5 to 1.0)" if metric_suffix == "adj_r2" else "full range (0 to 1.0)"),
+        (ax2, f"zoom ({zoom_lo:.2f}–1.0) | bin width = 0.005"),
+    ]:
+        ax.set_xlabel(metric_label, fontsize=LABEL_SIZE)
+        ax.set_ylabel("% of timestep fits", fontsize=LABEL_SIZE)
+        ax.set_title(title_sfx, fontsize=LABEL_SIZE)
+        ax.grid(alpha=0.25)
+        ax.spines[["top", "right"]].set_visible(False)
+
+    ax2.xaxis.set_major_locator(mticker.MultipleLocator(0.05))
+    ax2.xaxis.set_minor_locator(mticker.MultipleLocator(0.01))
+
+    ax1.legend(fontsize=LEGEND_SIZE, frameon=True)
+    ax2.legend(fontsize=LEGEND_SIZE - 1, frameon=True, loc="upper left")
+
+    fig.suptitle(
+        f"{SPECIES} {title_name} {metric_label} distribution\n"
+        f"{R2_MODE} station set",
+        fontsize=TITLE_SIZE,
+        y=1.01,
+    )
+
+    savefig(f"dual_panel_{metric_suffix}_{variable_key}_{R2_MODE}.png")
 
 
 def run_r2_distribution_plots():
@@ -576,24 +812,45 @@ def run_r2_distribution_plots():
     print(f"R² distribution mode: {R2_MODE}")
     print(f"Number of CSV files used: {len(csv_files)}")
 
-    df_all = load_multiple_station_csvs(csv_files)
+    # BUG FIX 2: use "distribution" to load only metric columns and save RAM
+    df_all = load_multiple_station_csvs(csv_files, usecols="distribution")
+
+    has_adj = lambda var: f"{var}_linear_adj_r2" in df_all.columns
+    has_aic = lambda var: f"{var}_linear_aic" in df_all.columns
 
     for variable_key in ["ratio", "cv_w"]:
-        # Ordinary R²
+
+        # Original step histograms
         plot_metric_histogram_for_variable(df_all, variable_key, "r2")
-        # Adjusted R² (only if the column exists)
-        if f"{variable_key}_linear_adj_r2" in df_all.columns:
+
+        if has_adj(variable_key):
             plot_metric_histogram_for_variable(df_all, variable_key, "adj_r2")
         else:
             print(f"[INFO] No adj_r2 columns for {variable_key}; "
                   f"run backfill_fit_metrics.py first.")
 
-        # Boxplot versions are available too if you want them:
+        # B — Survival / reversed-CDF
+        plot_reversed_cdf_for_variable(df_all, variable_key, "r2")
+
+        if has_adj(variable_key):
+            plot_reversed_cdf_for_variable(df_all, variable_key, "adj_r2")
+
+        # C — Dual-panel histogram (full + zoom)
+        plot_dual_panel_histogram_for_variable(df_all, variable_key, "r2")
+
+        if has_adj(variable_key):
+            plot_dual_panel_histogram_for_variable(df_all, variable_key, "adj_r2")
+
+        # Best-model bar chart
+        if has_aic(variable_key):
+            plot_best_model_bar_for_variable(df_all, variable_key)
+        else:
+            print(f"[INFO] No AIC columns for {variable_key}; "
+                  f"skipping best-model bar chart.")
+
+        # Boxplot versions (uncomment if wanted)
         # plot_metric_distribution_for_variable(df_all, variable_key, "r2")
         # plot_metric_distribution_for_variable(df_all, variable_key, "adj_r2")
-
-        # Best-model bar chart (needs AIC columns)
-        plot_best_model_bar_for_variable(df_all, variable_key)
 
 
 # ============================================================
@@ -611,13 +868,14 @@ def main():
     print("\n" + "=" * 80)
     print("Running R² / adjusted-R² distribution and best-model plots")
     print("=" * 80)
-    run_r2_distribution_plots()
+    #run_r2_distribution_plots()
 
     print("\nAll plots completed.")
     print(f"Output directory: {OUT_DIR}")
     end = time.time()
     print("End:", dt.datetime.fromtimestamp(end).strftime("%Y-%m-%d %H:%M:%S"))
     print(f"Execution time: {(end - start) / 60:.2f} minutes")
+
 
 if __name__ == "__main__":
     main()

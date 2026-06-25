@@ -32,8 +32,8 @@ STATIONS = [
 
 # Used only if SELECTION_MODE = "idx_range"
 IDX_COL = "station_idx"
-IDX_MIN = 1101
-IDX_MAX = 1300   # inclusive
+IDX_MIN = 1451
+IDX_MAX = 1500   # inclusive
 
 # If True, existing CSV files will be overwritten
 OVERWRITE = True

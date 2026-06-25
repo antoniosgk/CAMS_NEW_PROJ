@@ -218,7 +218,7 @@ def plot_all_sectors_subplot(sector_data, out_file):
         )
 
     fig.suptitle(
-        f"Climatological CV (%) | all sectors | Approach 2 ",
+        f"Climatological CV (%) | all sectors | SR 2 ",
         fontsize=TITLE_SIZE + 4,
         fontweight=TITLE_WEIGHT
     )

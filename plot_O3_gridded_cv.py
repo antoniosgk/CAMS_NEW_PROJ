@@ -821,7 +821,7 @@ def plot_all_sectors_together(ds, station_info):
     plot_all_sectors_subplot(
         station_info=station_info,
         sector_values_dict=all_values,
-        title="Climatological CV (%) | all sectors | Approach 3",
+        title="Climatological CV (%) | all sectors | SR 3",
         out_file=OUT_DIR / "O3_CV_all_all_sectors.png",
         vmin=vmin,
         vmax=vmax,
