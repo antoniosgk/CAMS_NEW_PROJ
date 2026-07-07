@@ -45,7 +45,10 @@ CSV_FILENAME = f"{STATION_ID}_{SPECIES}_area_fits.csv"
 # ------------------------------------------------------------
 PLOT_LAYOUT = "stacked"
 # PLOT_LAYOUT = "separate"
-
+# Lambda thresholds as fractions of each timestep's own C10 area.
+# C10_AREA_KM2 is read from the CSV column "area_km2_C10" per timestep.
+LAMBDA_STRICT_FRAC  = 1 / 3    # plateau clearly within domain
+LAMBDA_RELAXED_FRAC = 1 / 2   # partial saturation only
 # ------------------------------------------------------------
 # Time range
 # ------------------------------------------------------------
@@ -67,7 +70,7 @@ END_DATE   = "2005-06-20"
 #   "filter" -> drop timesteps where λ > LAMBDA_MAX_KM2 entirely; the figure
 #               title reports the percentage dropped.
 # ------------------------------------------------------------
-LAMBDA_DISPLAY  = "clip"        # "clip" | "log" | "filter"
+LAMBDA_DISPLAY  = "filter"        # "clip" | "log" | "filter"
 LAMBDA_MAX_KM2  = 50_000.0      # threshold for "clip" and "filter"
 
 # ------------------------------------------------------------
@@ -552,62 +555,88 @@ def run_aicc_timeseries(df):
 # ============================================================
 
 def plot_lambda_timeseries(df, variable):
-    """
-    The saturating model is y = a + b (1 - exp(-x/lam)), with lam stored as
-    'c'. Lambda has direct physical meaning: the area scale (km^2) over which
-    the metric saturates. This is the headline publishable parameter for
-    representativeness.
-
-    Display modes (set by LAMBDA_DISPLAY):
-        "clip"   - cap the visible y-range at LAMBDA_MAX_KM2 (data unchanged)
-        "log"    - log y-axis to compress extreme values
-        "filter" - drop timesteps where lambda exceeds LAMBDA_MAX_KM2
-    """
     col = f"{variable}_saturating_c"
     if col not in df.columns:
         print(f"[skip] no saturating model for {variable}")
         return
 
-    mask = filter_by_n(df, variable, "saturating")
-    vals = clean(df.loc[mask, col])
+    mask  = filter_by_n(df, variable, "saturating")
+    vals  = clean(df.loc[mask, col])
     times = df.loc[mask, "plot_datetime"]
 
-    # apply mode-specific data handling
+    # per-timestep C10 thresholds
+    if "area_km2_C10" in df.columns:
+        c10            = df.loc[mask, "area_km2_C10"].pipe(clean)
+        lambda_strict  = c10 * LAMBDA_STRICT_FRAC
+        lambda_relaxed = c10 * LAMBDA_RELAXED_FRAC
+    else:
+        raise KeyError("Column 'area_km2_C10' not found in CSV.")
+
+    c10_median     = float(c10.median())
+    strict_median  = float(lambda_strict.median())
+    relaxed_median = float(lambda_relaxed.median())
+
+    # category fractions
+    n_total       = int(vals.notna().sum())
+    n_constrained = int((vals <= lambda_strict).sum())
+    n_marginal    = int(((vals > lambda_strict) & (vals <= lambda_relaxed)).sum())
+    n_degenerate  = int((vals > lambda_relaxed).sum())
+    print(f"\nλ categories for {variable} (C10 median = {c10_median:,.0f} km²):")
+    print(f"  constrained (λ ≤ C10/3, median threshold {strict_median:,.0f} km²):  "
+          f"{n_constrained:,} / {n_total:,}  ({100*n_constrained/n_total:.1f}%)")
+    print(f"  marginal    (λ ≤ C10/2, median threshold {relaxed_median:,.0f} km²):  "
+          f"{n_marginal:,} / {n_total:,}  ({100*n_marginal/n_total:.1f}%)")
+    print(f"  degenerate  (λ >  C10/2, median threshold {relaxed_median:,.0f} km²):  "
+          f"{n_degenerate:,} / {n_total:,}  ({100*n_degenerate/n_total:.1f}%)")
+
+    # mode-specific data handling
     extra_title = ""
     if LAMBDA_DISPLAY == "filter":
-        keep = vals <= LAMBDA_MAX_KM2
-        n_total   = int(vals.notna().sum())
-        n_dropped = int((vals > LAMBDA_MAX_KM2).sum())
+        keep      = vals <= lambda_relaxed
+        n_dropped = int((~keep).sum())
         pct_drop  = 100.0 * n_dropped / n_total if n_total > 0 else 0.0
-        vals  = vals.where(keep)
-        extra_title = (f"  |  filtered: λ ≤ {LAMBDA_MAX_KM2:,.0f} km² "
+        vals      = vals.where(keep)
+        extra_title = (f"  |  filtered: λ ≤ C10/2 "
                        f"({pct_drop:.1f}% dropped)")
     elif LAMBDA_DISPLAY not in ("clip", "log"):
-        raise ValueError(f"Invalid LAMBDA_DISPLAY: {LAMBDA_DISPLAY!r}. "
-                         f"Use 'clip', 'log', or 'filter'.")
+        raise ValueError(f"Invalid LAMBDA_DISPLAY: {LAMBDA_DISPLAY!r}.")
 
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.plot(times, vals,
             color=MODEL_COLORS["saturating"], linewidth=0.9, alpha=0.9)
 
-    # apply mode-specific axis handling
+    # mode-specific axis handling
     if LAMBDA_DISPLAY == "clip":
-        ax.set_ylim(0, LAMBDA_MAX_KM2)
-        n_total      = int(vals.notna().sum())
-        n_clipped    = int((vals > LAMBDA_MAX_KM2).sum())
-        pct_clipped  = 100.0 * n_clipped / n_total if n_total > 0 else 0.0
+        ax.set_ylim(0, relaxed_median * 4)
+        n_clipped   = int((vals > relaxed_median * 4).sum())
+        pct_clipped = 100.0 * n_clipped / n_total if n_total > 0 else 0.0
         if pct_clipped > 0:
-            extra_title = (f"  |  clipped at {LAMBDA_MAX_KM2:,.0f} km² "
+            extra_title = (f"  |  clipped at 4×relaxed median "
                            f"({pct_clipped:.1f}% off-scale)")
     elif LAMBDA_DISPLAY == "log":
         ax.set_yscale("log")
 
-    # median reference line (computed AFTER any filtering)
+    # rolling median (capped at relaxed threshold before smoothing)
+    vals_capped  = vals.where(vals <= lambda_relaxed)
+    vals_indexed = vals_capped.set_axis(times)
+    rolling_med  = vals_indexed.rolling("30D", center=True, min_periods=200).median()
+    ax.plot(times, rolling_med, color="black", linewidth=1.8, alpha=0.9,
+            label="30-day rolling median (capped at C10/2)")
+
+    # overall median of uncapped values
     median_val = vals.median()
     if np.isfinite(median_val):
-        ax.axhline(median_val, color="black", linewidth=0.8, linestyle="--",
-                   alpha=0.6, label=f"median λ = {median_val:,.0f} km²")
-        ax.legend(frameon=True, loc="best")
+        ax.axhline(median_val, color="black", linewidth=0.8, linestyle=":",
+                   alpha=0.6, label=f"overall median λ = {median_val:,.0f} km²")
+
+    # physical threshold lines
+    ax.axhline(strict_median,  color="#d62728", linewidth=1.2, linestyle="--",
+               alpha=0.8, label=f"strict  λ = C10/3  ({strict_median:,.0f} km²)")
+    ax.axhline(relaxed_median, color="#ff7f0e", linewidth=1.2, linestyle="--",
+               alpha=0.8, label=f"relaxed  λ = C10/2  ({relaxed_median:,.0f} km²)")
+
+    # single legend call after all artists are added
+    ax.legend(frameon=True, loc="upper right")
 
     nice_time_axis(ax)
     ax.set_xlabel("Time")
@@ -618,7 +647,6 @@ def plot_lambda_timeseries(df, variable):
         fontsize=TITLE_SIZE,
     )
     savefig(f"lambda_timeseries_{STATION_ID}_{variable}_{LAMBDA_DISPLAY}.png")
-
 
 def run_lambda_timeseries(df):
     print("\n[4/4] Lambda (saturating length scale) time-series")
@@ -636,10 +664,10 @@ def main():
 
     df = load_data()
 
-    run_slope_timeseries(df)
-    run_best_model_bars(df)
-    run_delta_distributions(df)
-    run_aicc_timeseries(df)
+    #run_slope_timeseries(df)
+    #run_best_model_bars(df)
+    #run_delta_distributions(df)
+    #run_aicc_timeseries(df)
     run_lambda_timeseries(df)
 
     t1 = time.time()
