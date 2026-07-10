@@ -1,19 +1,18 @@
+
 #%%
 """
-Plot the area-based multi-model fit results produced by area_fit_backfill.py.
+Plot the area-based multi-model fit results produced by metrics_fit_backfill_area.py.
 
-Tier-1 figures, for ONE station:
-
-1. Slope time-series of the 7 models, with a model-specific companion
-   parameter on the right y-axis.
-     PLOT_LAYOUT = "stacked"   -> 7 figures, each with 3 stacked subplots
-                                  (one per variable: ratio, cv_w, mean_w)
-     PLOT_LAYOUT = "separate"  -> 21 figures, one per (model, variable)
-2. Best-model bar charts: 5 selection criteria x 3 variables = 15 plots.
-3. AICc time-series: all 7 models on one axes, one figure per variable = 3 plots.
-4. Lambda (saturating length scale, km^2) time-series, one figure per variable = 3 plots.
-
-Total: 28 (stacked) or 42 (separate) figures.
+Plots produced:
+1. Slope time-series (stacked or separate) — with configurable SLOPE_MODE:
+      "chord"  = average slope C1->C10 (read from CSV)
+      "box04"  = analytic dy/dx at the 0.4 deg box area
+      "custom" = analytic dy/dx at any user-specified area in km^2
+2. Best-model bar charts (5 criteria x VARIABLES)
+2b. Delta distribution boxplots (5 criteria x VARIABLES)
+3. AICc time-series (all 7 models per variable)
+4. Lambda time-series (saturating length scale)
+5. Single-timestep fit inspection (observed points + 7 fitted curves)
 """
 
 from pathlib import Path
@@ -29,7 +28,7 @@ import datetime as dt
 # USER SETTINGS
 # ============================================================
 
-IN_DIR  = Path("/mnt/store01/agkiokas/CAMS/fit_outputs")   # where area_fit_backfill writes
+IN_DIR  = Path("/mnt/store01/agkiokas/CAMS/fit_outputs")
 OUT_DIR = Path("/mnt/store01/agkiokas/CAMS/area_fit_plots")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -39,16 +38,35 @@ CSV_FILENAME = f"{STATION_ID}_{SPECIES}_area_fits.csv"
 
 # ------------------------------------------------------------
 # Plot 1 — slope time-series layout
-#   "stacked"  -> 7 figures, each with 3 vertically stacked subplots
-#                 (one per variable). Shared x-axis within each figure.
-#   "separate" -> 21 figures, one per (model, variable) pair.
 # ------------------------------------------------------------
-PLOT_LAYOUT = "stacked"
-# PLOT_LAYOUT = "separate"
-# Lambda thresholds as fractions of each timestep's own C10 area.
-# C10_AREA_KM2 is read from the CSV column "area_km2_C10" per timestep.
-LAMBDA_STRICT_FRAC  = 1 / 3    # plateau clearly within domain
-LAMBDA_RELAXED_FRAC = 1 / 2   # partial saturation only
+PLOT_LAYOUT = "stacked"      # "stacked" | "separate"
+
+# ------------------------------------------------------------
+# Slope mode for the slope time-series plots
+#   "chord"  -> average slope C1->C10, read from {var}_{model}_slope
+#   "box04"  -> analytic derivative dy/dx at the 0.4 deg box area
+#               (reads area_km2_box04 from CSV; recomputes if absent)
+#   "custom" -> analytic derivative dy/dx at SLOPE_AT_KM2
+# ------------------------------------------------------------
+SLOPE_MODE   = "box04"       # "chord" | "box04" | "custom"
+SLOPE_AT_KM2 = 5000.0        # used only when SLOPE_MODE == "custom"
+BOX_DEG      = 0.4           # label / recompute fallback for "box04"
+
+# ------------------------------------------------------------
+# Lambda display
+# ------------------------------------------------------------
+LAMBDA_DISPLAY      = "filter"       # "clip" | "log" | "filter"
+LAMBDA_MAX_KM2      = 50_000.0
+LAMBDA_STRICT_FRAC  = 1 / 3
+LAMBDA_RELAXED_FRAC = 1 / 2
+
+# ------------------------------------------------------------
+# Single-timestep fit inspection
+# FIT_TIMESTEP: int row index (0-based) or datetime string
+# ------------------------------------------------------------
+PLOT_SINGLE_FIT = True
+FIT_TIMESTEP    = 0
+
 # ------------------------------------------------------------
 # Time range
 # ------------------------------------------------------------
@@ -57,30 +75,11 @@ START_DATE = "2005-05-20"
 END_DATE   = "2005-06-20"
 
 # ------------------------------------------------------------
-# Lambda (saturating length scale) display
-# ------------------------------------------------------------
-# Saturating fits can produce physically meaningless λ values when the curve
-# does not actually saturate within the area range (the fit degenerates toward
-# linear, pushing λ → ∞). Choose how to handle this on the λ time-series:
-#
-#   "clip"   -> y-axis capped at LAMBDA_MAX_KM2; values above are off-screen
-#               but remain in the CSV. Clearest for presentations.
-#   "log"    -> y-axis on a log scale; extreme values compressed but visible.
-#               Recommended for publications.
-#   "filter" -> drop timesteps where λ > LAMBDA_MAX_KM2 entirely; the figure
-#               title reports the percentage dropped.
-# ------------------------------------------------------------
-LAMBDA_DISPLAY  = "filter"        # "clip" | "log" | "filter"
-LAMBDA_MAX_KM2  = 50_000.0      # threshold for "clip" and "filter"
-
-# ------------------------------------------------------------
 # Variables and selection criteria
 # ------------------------------------------------------------
 VARIABLES = ["ratio", "cv_w"]
 CRITERIA  = ["r2", "adj_r2", "aic", "aicc", "bic"]
 
-# Minimum sectors used in a fit for the timestep to count in the plots.
-# Same filter as the previous plotting script.
 MIN_N_SECTORS = 8
 
 # ------------------------------------------------------------
@@ -91,7 +90,6 @@ TITLE_SIZE  = 15
 LABEL_SIZE  = 12
 TICK_SIZE   = 10
 LEGEND_SIZE = 9
-
 
 # ============================================================
 # STYLE
@@ -113,55 +111,38 @@ plt.rcParams.update({
     "axes.spines.right":  False,
 })
 
-
 # ============================================================
 # MODEL DEFINITIONS
 # ============================================================
-# Each model has a "companion" parameter that, together with the slope,
-# best describes the shape of the fit. See discussion for rationale.
 
 MODELS = ["linear", "quadratic", "cubic", "logarithmic",
           "exponential", "power", "saturating"]
 
 MODEL_LABELS = {
-    "linear":      "Linear",
-    "quadratic":   "Quadratic",
-    "cubic":       "Cubic",
-    "logarithmic": "Logarithmic",
-    "exponential": "Exponential",
-    "power":       "Power-law",
-    "saturating":  "Saturating",
+    "linear": "Linear", "quadratic": "Quadratic", "cubic": "Cubic",
+    "logarithmic": "Logarithmic", "exponential": "Exponential",
+    "power": "Power-law", "saturating": "Saturating",
 }
 
-# 7-colour palette tuned to be distinguishable on screen and in print.
 MODEL_COLORS = {
-    "linear":      "#1f77b4",   # blue
-    "quadratic":   "#ff7f0e",   # orange
-    "cubic":       "#2ca02c",   # green
-    "logarithmic": "#9467bd",   # purple
-    "exponential": "#d62728",   # red
-    "power":       "#8c564b",   # brown
-    "saturating":  "#17becf",   # cyan
+    "linear": "#1f77b4", "quadratic": "#ff7f0e", "cubic": "#2ca02c",
+    "logarithmic": "#9467bd", "exponential": "#d62728",
+    "power": "#8c564b", "saturating": "#17becf",
 }
 
-# (companion_param, human-readable name, units suffix)
-# Maps the stored column suffix (_a/_b/_c/_d) to the parameter name we plot
-# on the right y-axis, and a short label for the axis.
 COMPANION = {
-    "linear":      ("a", "intercept a",      "y = a + b·x"),
-    "quadratic":   ("c", "curvature c",      "y = a + b·x + c·x²"),
-    "cubic":       ("d", "cubic coeff. d",   "y = a + b·x + c·x² + d·x³"),
-    "logarithmic": ("a", "intercept a",      "y = a + b·ln(x)"),
-    "exponential": ("c", "rate c (1/km²)",   "y = a + b·exp(c·x)"),
-    "power":       ("b", "exponent b",       "y = a·x^b"),
-    "saturating":  ("c", "length scale λ (km²)", "y = a + b·(1 − exp(−x/λ))"),
+    "linear":      ("a", "intercept a",            "y = a + b\u00b7x"),
+    "quadratic":   ("c", "curvature c",            "y = a + b\u00b7x + c\u00b7x\u00b2"),
+    "cubic":       ("d", "cubic coeff. d",         "y = a + b\u00b7x + c\u00b7x\u00b2 + d\u00b7x\u00b3"),
+    "logarithmic": ("a", "intercept a",            "y = a + b\u00b7ln(x)"),
+    "exponential": ("c", "rate c (1/km\u00b2)",    "y = a + b\u00b7exp(c\u00b7x)"),
+    "power":       ("b", "exponent b",             "y = a\u00b7x^b"),
+    "saturating":  ("c", "length scale \u03bb (km\u00b2)",
+                    "y = a + b\u00b7(1 \u2212 exp(\u2212x/\u03bb))"),
 }
 
-# Companion-axis line color: a desaturated grey to keep emphasis on the slope.
 COMPANION_COLOR = "#555555"
 SLOPE_COLOR_FOR_MODEL = lambda m: MODEL_COLORS[m]
-
-# Variable display names
 VAR_LABELS = {"ratio": "ratio", "cv_w": "CV", "mean_w": "mean (ppb)"}
 
 
@@ -178,7 +159,6 @@ def savefig(name):
 
 
 def detect_datetime_column(df):
-    """Find the first usable timestamp column and produce a plot_datetime."""
     if "datetime" in df.columns:
         df["plot_datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
     elif "timestamp" in df.columns:
@@ -195,7 +175,6 @@ def detect_datetime_column(df):
 
 
 def filter_by_n(df, variable, model):
-    """Boolean mask: rows where the fit used at least MIN_N_SECTORS sectors."""
     n_col = f"{variable}_{model}_n"
     if n_col in df.columns:
         return df[n_col] >= MIN_N_SECTORS
@@ -203,7 +182,6 @@ def filter_by_n(df, variable, model):
 
 
 def nice_time_axis(ax):
-    """Auto-locate major ticks based on the visible span."""
     locator   = mdates.AutoDateLocator()
     formatter = mdates.ConciseDateFormatter(locator)
     ax.xaxis.set_major_locator(locator)
@@ -212,7 +190,6 @@ def nice_time_axis(ax):
 
 
 def clean(s):
-    """Coerce to numeric, drop inf/nan."""
     return pd.to_numeric(s, errors="coerce").replace([np.inf, -np.inf], np.nan)
 
 
@@ -233,41 +210,136 @@ def load_data():
 
 
 # ============================================================
+# ANALYTIC DERIVATIVE + SLOPE MODE RESOLVER
+# ============================================================
+
+def analytic_derivative(df, variable, model, x_star):
+    """
+    dy/dx of the fitted model at x = x_star (km^2), from stored parameters.
+    Vectorised over all rows; returns a Series.
+    """
+    a = clean(df.get(f"{variable}_{model}_a"))
+    b = clean(df.get(f"{variable}_{model}_b"))
+    c = clean(df.get(f"{variable}_{model}_c"))
+    d = clean(df.get(f"{variable}_{model}_d"))
+
+    if model == "linear":
+        return b
+    if model == "quadratic":
+        return b + 2.0 * c * x_star
+    if model == "cubic":
+        return b + 2.0 * c * x_star + 3.0 * d * x_star ** 2
+    if model == "logarithmic":
+        return b / x_star
+    if model == "exponential":
+        return b * c * np.exp(np.clip(c * x_star, -50, 50))
+    if model == "power":
+        return a * b * np.power(x_star, b - 1.0)
+    if model == "saturating":
+        lam = c
+        return (b / lam) * np.exp(-np.clip(x_star / lam, -50, 50))
+    raise ValueError(f"Unknown model: {model}")
+
+
+def resolve_slope_x(df):
+    """
+    Return (x_star_km2, label, out_of_range) for the current SLOPE_MODE.
+    For 'chord' returns (None, label, False).
+    """
+    if SLOPE_MODE == "chord":
+        return None, "average slope C1\u2192C10", False
+
+    if SLOPE_MODE == "box04":
+        if "area_km2_box04" in df.columns:
+            x_star = float(df["area_km2_box04"].iloc[0])
+        else:
+            lat = float(df["model_lat"].iloc[0])
+            phi_s = np.radians(lat - BOX_DEG / 2.0)
+            phi_n = np.radians(lat + BOX_DEG / 2.0)
+            R = 6371.0088
+            x_star = R**2 * (np.sin(phi_n) - np.sin(phi_s)) * np.radians(BOX_DEG)
+        label = f"dy/dx at {x_star:,.0f} km\u00b2 ({BOX_DEG}\u00b0 box)"
+    elif SLOPE_MODE == "custom":
+        x_star = float(SLOPE_AT_KM2)
+        label = f"dy/dx at {x_star:,.0f} km\u00b2"
+    else:
+        raise ValueError(f"Invalid SLOPE_MODE: {SLOPE_MODE!r}")
+
+    out_of_range = False
+    if "area_km2_C1" in df.columns and "area_km2_C10" in df.columns:
+        x_lo = float(df["area_km2_C1"].iloc[0])
+        x_hi = float(df["area_km2_C10"].iloc[0])
+        if not (x_lo <= x_star <= x_hi):
+            out_of_range = True
+            print(f"[WARNING] x* = {x_star:,.0f} km\u00b2 is outside "
+                  f"[{x_lo:,.0f}, {x_hi:,.0f}] — extrapolation.")
+            label += "  (out of C1\u2013C10 range)"
+    return x_star, label, out_of_range
+
+
+# ============================================================
+# MODEL PREDICTION (for single-timestep inspection)
+# ============================================================
+
+def model_prediction(row, variable, model, x):
+    """Evaluate the fitted model on an x array (km^2) for one CSV row."""
+    a = row.get(f"{variable}_{model}_a", np.nan)
+    b = row.get(f"{variable}_{model}_b", np.nan)
+    c = row.get(f"{variable}_{model}_c", np.nan)
+    d = row.get(f"{variable}_{model}_d", np.nan)
+    x = np.asarray(x, dtype=float)
+
+    if model == "linear":
+        return a + b * x
+    if model == "quadratic":
+        return a + b * x + c * x ** 2
+    if model == "cubic":
+        return a + b * x + c * x ** 2 + d * x ** 3
+    if model == "logarithmic":
+        return a + b * np.log(x)
+    if model == "exponential":
+        return a + b * np.exp(np.clip(c * x, -50, 50))
+    if model == "power":
+        return a * np.power(x, b)
+    if model == "saturating":
+        lam = c
+        return a + b * (1.0 - np.exp(-np.clip(x / lam, -50, 50)))
+    raise ValueError(f"Unknown model: {model}")
+
+
+# ============================================================
 # PLOT 1: SLOPE + COMPANION TIME-SERIES
 # ============================================================
 
 def _plot_slope_panel(ax, df, variable, model):
-    """
-    Plot one (variable, model) panel:
-      left y-axis  = slope of the fitted curve (avg slope across area range)
-      right y-axis = the model-specific companion parameter
-    The two series are drawn with distinct colours and explicitly labelled axes.
-    """
     mask = filter_by_n(df, variable, model)
     sub  = df.loc[mask]
 
-    slope_col = f"{variable}_{model}_slope"
-    comp_key, comp_label,_ = COMPANION[model]
-    comp_col  = f"{variable}_{model}_{comp_key}"
+    comp_key, comp_label, _ = COMPANION[model]
+    comp_col = f"{variable}_{model}_{comp_key}"
 
-    if slope_col not in df.columns:
-        ax.text(0.5, 0.5, f"missing: {slope_col}", ha="center", va="center",
-                transform=ax.transAxes)
-        return
+    x_star, slope_label, _ = resolve_slope_x(df)
+
+    if SLOPE_MODE == "chord":
+        slope_col = f"{variable}_{model}_slope"
+        if slope_col not in df.columns:
+            ax.text(0.5, 0.5, f"missing: {slope_col}", ha="center",
+                    va="center", transform=ax.transAxes)
+            return
+        slope_vals = clean(sub[slope_col])
+    else:
+        slope_vals = analytic_derivative(sub, variable, model, x_star)
 
     slope_color = SLOPE_COLOR_FOR_MODEL(model)
-    slope_vals  = clean(sub[slope_col])
     ax.plot(sub["plot_datetime"], slope_vals,
             color=slope_color, linewidth=0.9, alpha=0.9,
-            label=f"slope ({variable})")
+            label=f"{slope_label}")
     ax.axhline(0, color="black", linewidth=0.6, linestyle="--", alpha=0.5)
-
-    ax.set_ylabel(f"slope of {VAR_LABELS[variable]}  (per km²)",
+    ax.set_ylabel(f"{VAR_LABELS[variable]}  (per km\u00b2)",
                   color=slope_color)
     ax.tick_params(axis="y", colors=slope_color)
     ax.spines["left"].set_color(slope_color)
 
-    # right y-axis: companion parameter
     ax2 = ax.twinx()
     if comp_col in df.columns:
         comp_vals = clean(sub[comp_col])
@@ -283,49 +355,42 @@ def _plot_slope_panel(ax, df, variable, model):
 
 
 def plot_slope_timeseries_stacked(df):
-    """7 figures, one per model. Each has 3 subplots: ratio / cv_w / mean_w."""
+    _, slope_label, _ = resolve_slope_x(df)
     for model in MODELS:
-        fig, axes = plt.subplots(
-            len(VARIABLES), 1,
-            figsize=(13, 9),
-            sharex=True,
-        )
+        fig, axes = plt.subplots(len(VARIABLES), 1, figsize=(13, 9), sharex=True)
         if len(VARIABLES) == 1:
             axes = [axes]
-
         for ax, var in zip(axes, VARIABLES):
             _plot_slope_panel(ax, df, var, model)
-            ax.set_title(f"{VAR_LABELS[var]}",
-                         loc="left", fontsize=LABEL_SIZE)
+            ax.set_title(f"{VAR_LABELS[var]}", loc="left", fontsize=LABEL_SIZE)
         nice_time_axis(axes[-1])
-
         fig.suptitle(
-               f"{SPECIES} | {STATION_ID} | {MODEL_LABELS[model]} fit:  "
+            f"{SPECIES} | {STATION_ID} | {MODEL_LABELS[model]} fit: "
             f"{COMPANION[model][2]}\n"
-              f"slope (left) + {COMPANION[model][1]} (right)",
-               fontsize=TITLE_SIZE, y=1.00,
-)
-        savefig(f"slope_stacked_{STATION_ID}_{model}.png")
+            f"{slope_label} (left) + {COMPANION[model][1]} (right)",
+            fontsize=TITLE_SIZE, y=1.00,
+        )
+        savefig(f"slope_stacked_{STATION_ID}_{model}_{SLOPE_MODE}.png")
 
 
 def plot_slope_timeseries_separate(df):
-    """21 figures, one per (model, variable). Same internal layout."""
+    _, slope_label, _ = resolve_slope_x(df)
     for model in MODELS:
         for var in VARIABLES:
             fig, ax = plt.subplots(figsize=(13, 5))
             _plot_slope_panel(ax, df, var, model)
             nice_time_axis(ax)
             ax.set_title(
-            f"{SPECIES} | {STATION_ID} | {MODEL_LABELS[model]} on "
-            f"{VAR_LABELS[var]}:  {COMPANION[model][2]}\n"
-            f"slope (left) + {COMPANION[model][1]} (right)",
-            fontsize=TITLE_SIZE,
-)
-            savefig(f"slope_separate_{STATION_ID}_{model}_{var}.png")
+                f"{SPECIES} | {STATION_ID} | {MODEL_LABELS[model]} on "
+                f"{VAR_LABELS[var]}: {COMPANION[model][2]}\n"
+                f"{slope_label} (left) + {COMPANION[model][1]} (right)",
+                fontsize=TITLE_SIZE,
+            )
+            savefig(f"slope_separate_{STATION_ID}_{model}_{var}_{SLOPE_MODE}.png")
 
 
 def run_slope_timeseries(df):
-    print("\n[1/4] Slope time-series plots")
+    print(f"\n[1/5] Slope time-series plots (mode: {SLOPE_MODE})")
     if PLOT_LAYOUT == "stacked":
         plot_slope_timeseries_stacked(df)
     elif PLOT_LAYOUT == "separate":
@@ -335,39 +400,25 @@ def run_slope_timeseries(df):
 
 
 # ============================================================
-# PLOT 2: BEST-MODEL BAR CHARTS (one per criterion x variable)
+# PLOT 2: BEST-MODEL BAR CHARTS
 # ============================================================
 
 def _best_model_per_row(df, variable, criterion):
-    """
-    For each row, return the model with the BEST value of `criterion`.
-
-    - R² and adjusted R² are MAXIMISED (higher is better).
-    - AIC, AICc, BIC are MINIMISED (lower is better).
-    Rows that fail the n filter for a given model are excluded for that model.
-    """
     cols = {m: f"{variable}_{m}_{criterion}" for m in MODELS}
-    have = all(c in df.columns for c in cols.values())
-    if not have:
+    if not all(c in df.columns for c in cols.values()):
         return None
-
     frame = pd.DataFrame(index=df.index)
     for m in MODELS:
         vals = clean(df[cols[m]])
         mask = filter_by_n(df, variable, m)
         vals = vals.where(mask, np.nan)
         frame[m] = vals
-
     valid_any = frame.notna().any(axis=1)
     best = pd.Series(index=df.index, dtype=object)
-
     if criterion in ("r2", "adj_r2"):
-        # higher is better
         best[valid_any] = frame.loc[valid_any].idxmax(axis=1)
     else:
-        # lower is better (aic, aicc, bic)
         best[valid_any] = frame.loc[valid_any].idxmin(axis=1)
-
     return best
 
 
@@ -376,11 +427,9 @@ def plot_best_model_bar(df, variable, criterion):
     if best is None:
         print(f"[skip] missing {criterion} columns for {variable}")
         return
-
     counts = best.value_counts()
     total  = int(counts.sum())
     if total == 0:
-        print(f"[skip] no valid best-model selections for {variable}/{criterion}")
         return
 
     heights = [counts.get(m, 0) for m in MODELS]
@@ -390,59 +439,46 @@ def plot_best_model_bar(df, variable, criterion):
 
     fig, ax = plt.subplots(figsize=(11, 6))
     bars = ax.bar(labels, pct, color=colors, alpha=0.85, width=0.65)
-
     for bar, p in zip(bars, pct):
         if p > 0:
-            ax.text(bar.get_x() + bar.get_width() / 2, p + 0.6,
+            ax.text(bar.get_x() + bar.get_width()/2, p + 0.6,
                     f"{p:.1f}%", ha="center", va="bottom",
                     fontsize=10, fontweight="bold")
 
-    crit_pretty = {"r2": "R²", "adj_r2": "adjusted R²",
+    crit_pretty = {"r2": "R\u00b2", "adj_r2": "adjusted R\u00b2",
                    "aic": "AIC", "aicc": "AICc", "bic": "BIC"}[criterion]
-    direction   = ("highest" if criterion in ("r2", "adj_r2") else "lowest")
-
+    direction = "highest" if criterion in ("r2", "adj_r2") else "lowest"
     ax.set_ylim(0, max(pct) * 1.15 if max(pct) > 0 else 1)
-    ax.set_ylabel(f"% of timesteps where this model has the {direction} {crit_pretty}")
+    ax.set_ylabel(f"% timesteps with {direction} {crit_pretty}")
     ax.set_xlabel("Fitted model")
-    ax.set_title(
-        f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  —  "
-        f"best model by {crit_pretty}  ({total:,} timesteps)",
-        fontsize=TITLE_SIZE,
-    )
+    ax.set_title(f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  \u2014  "
+                 f"best model by {crit_pretty}  ({total:,} timesteps)",
+                 fontsize=TITLE_SIZE)
     plt.xticks(rotation=15, ha="right")
     savefig(f"barplot_best_{criterion}_{STATION_ID}_{variable}.png")
 
 
 def run_best_model_bars(df):
-    print("\n[2/4] Best-model bar charts")
+    print("\n[2/5] Best-model bar charts")
     for var in VARIABLES:
         for crit in CRITERIA:
             plot_best_model_bar(df, var, crit)
+
+
 # ============================================================
-# PLOT 2b: DELTA DISTRIBUTION PLOTS (one per criterion x variable)
+# PLOT 2b: DELTA DISTRIBUTION
 # ============================================================
 
 def plot_delta_distribution(df, variable, criterion):
-    """
-    Boxplot of delta_{criterion} per model across all timesteps.
-
-    Delta = {model}_{criterion} - min({criterion} across all 7 models).
-    The winning model's delta is always 0; others show how far behind they are.
-
-    Reference lines at delta = 2 and delta = 10 (Burnham & Anderson thresholds
-    for information criteria) — not meaningful for r2 / adj_r2 which use a
-    different scale, so they are suppressed for those two.
-    """
     delta_cols = {m: f"{variable}_{m}_delta_{criterion}" for m in MODELS}
     have = [c for c in delta_cols.values() if c in df.columns]
     if not have:
         print(f"[skip] no delta_{criterion} columns for {variable}")
         return
 
-    crit_pretty = {
-        "r2": "R²", "adj_r2": "adj. R²",
-        "aic": "AIC", "aicc": "AICc", "bic": "BIC",
-    }.get(criterion, criterion.upper())
+    crit_pretty = {"r2": "R\u00b2", "adj_r2": "adj. R\u00b2",
+                   "aic": "AIC", "aicc": "AICc", "bic": "BIC"
+                   }.get(criterion, criterion.upper())
 
     data, labels, colors, means = [], [], [], []
     for m in MODELS:
@@ -457,11 +493,8 @@ def plot_delta_distribution(df, variable, criterion):
         means.append(float(vals.mean()) if len(vals) else np.nan)
 
     fig, ax = plt.subplots(figsize=(12, 6))
-
-    bp = ax.boxplot(
-        data, tick_labels=labels,
-        showfliers=False, patch_artist=True, widths=0.55,
-    )
+    bp = ax.boxplot(data, tick_labels=labels, showfliers=False,
+                    patch_artist=True, widths=0.55)
     for patch, color in zip(bp["boxes"], colors):
         patch.set_facecolor(color)
         patch.set_alpha(0.35)
@@ -469,53 +502,46 @@ def plot_delta_distribution(df, variable, criterion):
         for line in bp[element]:
             line.set_color("#1B2A3A")
 
-    # mean diamonds
     x_pos = np.arange(1, len(means) + 1)
-    ax.scatter(x_pos, means, marker="D", s=65,
-               color="black", zorder=5, label="mean Δ")
-    for i, (xp, mv) in enumerate(zip(x_pos, means)):
+    ax.scatter(x_pos, means, marker="D", s=65, color="black",
+               zorder=5, label="mean \u0394")
+    for xp, mv in zip(x_pos, means):
         if np.isfinite(mv):
-            ax.text(xp, mv + max(means) * 0.025 + 0.3,
+            ax.text(xp, mv + max(m for m in means if np.isfinite(m)) * 0.025 + 0.3,
                     f"{mv:.1f}", ha="center", va="bottom",
                     fontsize=9.5, fontweight="bold")
 
-    # reference lines (only for information criteria, not R²)
     if criterion in ("aic", "aicc", "bic"):
-        for ref, label_txt in ((2, "Δ = 2  (indistinguishable)"),
-                               (10, "Δ = 10  (decisive)")):
+        for ref, txt in ((2, "\u0394 = 2  (indistinguishable)"),
+                         (10, "\u0394 = 10  (decisive)")):
             ax.axhline(ref, color="grey", linewidth=1.0,
-                       linestyle="--", alpha=0.65, label=label_txt)
+                       linestyle="--", alpha=0.65, label=txt)
 
     ax.set_ylim(bottom=0)
     ax.set_xlabel("Fitted model")
-    ax.set_ylabel(f"Δ{crit_pretty}  (0 = best model)")
-    ax.set_title(
-        f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  —  "
-        f"Δ{crit_pretty} distribution across timesteps\n"
-        f"(lower = closer to winning model; 0 = winner)",
-        fontsize=TITLE_SIZE,
-    )
+    ax.set_ylabel(f"\u0394{crit_pretty}  (0 = best model)")
+    ax.set_title(f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  \u2014  "
+                 f"\u0394{crit_pretty} distribution across timesteps",
+                 fontsize=TITLE_SIZE)
     plt.xticks(rotation=15, ha="right")
     ax.legend(frameon=True, loc="upper left")
     savefig(f"delta_{criterion}_{STATION_ID}_{variable}.png")
 
 
 def run_delta_distributions(df):
-    print("\n[2b/4] Delta distribution plots")
+    print("\n[2b/5] Delta distribution plots")
     for var in VARIABLES:
         for crit in CRITERIA:
-            # skip r2 / adj_r2 if no delta columns present (old CSVs)
             plot_delta_distribution(df, var, crit)
 
+
 # ============================================================
-# PLOT 3: AICc TIME-SERIES (all 7 models on one axes)
+# PLOT 3: AICc TIME-SERIES
 # ============================================================
 
 def plot_aicc_timeseries(df, variable):
-    """One figure per variable: AICc for all 7 models over time."""
     fig, ax = plt.subplots(figsize=(14, 6))
     any_plotted = False
-
     for model in MODELS:
         col = f"{variable}_{model}_aicc"
         if col not in df.columns:
@@ -526,32 +552,26 @@ def plot_aicc_timeseries(df, variable):
                 color=MODEL_COLORS[model], linewidth=0.8, alpha=0.8,
                 label=MODEL_LABELS[model])
         any_plotted = True
-
     if not any_plotted:
         plt.close(fig)
-        print(f"[skip] no AICc columns for {variable}")
         return
-
     nice_time_axis(ax)
     ax.set_xlabel("Time")
     ax.set_ylabel("AICc  (lower = better)")
-    ax.set_title(
-        f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  —  "
-        f"AICc time-series across the 7 candidate models",
-        fontsize=TITLE_SIZE,
-    )
+    ax.set_title(f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  \u2014  "
+                 f"AICc time-series", fontsize=TITLE_SIZE)
     ax.legend(ncol=4, frameon=True, loc="best")
     savefig(f"aicc_timeseries_{STATION_ID}_{variable}.png")
 
 
 def run_aicc_timeseries(df):
-    print("\n[3/4] AICc time-series plots")
+    print("\n[3/5] AICc time-series plots")
     for var in VARIABLES:
         plot_aicc_timeseries(df, var)
 
 
 # ============================================================
-# PLOT 4: LAMBDA (SATURATING LENGTH SCALE) TIME-SERIES
+# PLOT 4: LAMBDA TIME-SERIES
 # ============================================================
 
 def plot_lambda_timeseries(df, variable):
@@ -564,94 +584,146 @@ def plot_lambda_timeseries(df, variable):
     vals  = clean(df.loc[mask, col])
     times = df.loc[mask, "plot_datetime"]
 
-    # per-timestep C10 thresholds
     if "area_km2_C10" in df.columns:
-        c10            = df.loc[mask, "area_km2_C10"].pipe(clean)
+        c10 = df.loc[mask, "area_km2_C10"].pipe(clean)
         lambda_strict  = c10 * LAMBDA_STRICT_FRAC
         lambda_relaxed = c10 * LAMBDA_RELAXED_FRAC
     else:
-        raise KeyError("Column 'area_km2_C10' not found in CSV.")
+        raise KeyError("Column 'area_km2_C10' not found.")
 
-    c10_median     = float(c10.median())
     strict_median  = float(lambda_strict.median())
     relaxed_median = float(lambda_relaxed.median())
 
-    # category fractions
-    n_total       = int(vals.notna().sum())
-    n_constrained = int((vals <= lambda_strict).sum())
-    n_marginal    = int(((vals > lambda_strict) & (vals <= lambda_relaxed)).sum())
-    n_degenerate  = int((vals > lambda_relaxed).sum())
-    print(f"\nλ categories for {variable} (C10 median = {c10_median:,.0f} km²):")
-    print(f"  constrained (λ ≤ C10/3, median threshold {strict_median:,.0f} km²):  "
-          f"{n_constrained:,} / {n_total:,}  ({100*n_constrained/n_total:.1f}%)")
-    print(f"  marginal    (λ ≤ C10/2, median threshold {relaxed_median:,.0f} km²):  "
-          f"{n_marginal:,} / {n_total:,}  ({100*n_marginal/n_total:.1f}%)")
-    print(f"  degenerate  (λ >  C10/2, median threshold {relaxed_median:,.0f} km²):  "
-          f"{n_degenerate:,} / {n_total:,}  ({100*n_degenerate/n_total:.1f}%)")
-
-    # mode-specific data handling
     extra_title = ""
     if LAMBDA_DISPLAY == "filter":
         keep      = vals <= lambda_relaxed
+        n_total   = int(vals.notna().sum())
         n_dropped = int((~keep).sum())
         pct_drop  = 100.0 * n_dropped / n_total if n_total > 0 else 0.0
         vals      = vals.where(keep)
-        extra_title = (f"  |  filtered: λ ≤ C10/2 "
-                       f"({pct_drop:.1f}% dropped)")
-    elif LAMBDA_DISPLAY not in ("clip", "log"):
-        raise ValueError(f"Invalid LAMBDA_DISPLAY: {LAMBDA_DISPLAY!r}.")
+        extra_title = f"  |  filtered (\u03bb \u2264 C10/2, {pct_drop:.1f}% dropped)"
+    elif LAMBDA_DISPLAY == "clip":
+        ax_max = relaxed_median * 4
+    elif LAMBDA_DISPLAY != "log":
+        raise ValueError(f"Invalid LAMBDA_DISPLAY: {LAMBDA_DISPLAY!r}")
 
     fig, ax = plt.subplots(figsize=(14, 6))
-    ax.plot(times, vals,
-            color=MODEL_COLORS["saturating"], linewidth=0.9, alpha=0.9)
+    ax.plot(times, vals, color=MODEL_COLORS["saturating"],
+            linewidth=0.9, alpha=0.9)
 
-    # mode-specific axis handling
     if LAMBDA_DISPLAY == "clip":
-        ax.set_ylim(0, relaxed_median * 4)
-        n_clipped   = int((vals > relaxed_median * 4).sum())
-        pct_clipped = 100.0 * n_clipped / n_total if n_total > 0 else 0.0
-        if pct_clipped > 0:
-            extra_title = (f"  |  clipped at 4×relaxed median "
-                           f"({pct_clipped:.1f}% off-scale)")
+        ax.set_ylim(0, ax_max)
     elif LAMBDA_DISPLAY == "log":
         ax.set_yscale("log")
 
-    # rolling median (capped at relaxed threshold before smoothing)
     vals_capped  = vals.where(vals <= lambda_relaxed)
     vals_indexed = vals_capped.set_axis(times)
     rolling_med  = vals_indexed.rolling("30D", center=True, min_periods=200).median()
     ax.plot(times, rolling_med, color="black", linewidth=1.8, alpha=0.9,
             label="30-day rolling median (capped at C10/2)")
 
-    # overall median of uncapped values
     median_val = vals.median()
     if np.isfinite(median_val):
         ax.axhline(median_val, color="black", linewidth=0.8, linestyle=":",
-                   alpha=0.6, label=f"overall median λ = {median_val:,.0f} km²")
-
-    # physical threshold lines
+                   alpha=0.6, label=f"overall median \u03bb = {median_val:,.0f} km\u00b2")
     ax.axhline(strict_median,  color="#d62728", linewidth=1.2, linestyle="--",
-               alpha=0.8, label=f"strict  λ = C10/3  ({strict_median:,.0f} km²)")
+               alpha=0.8, label=f"strict \u03bb = C10/3 ({strict_median:,.0f} km\u00b2)")
     ax.axhline(relaxed_median, color="#ff7f0e", linewidth=1.2, linestyle="--",
-               alpha=0.8, label=f"relaxed  λ = C10/2  ({relaxed_median:,.0f} km²)")
-
-    # single legend call after all artists are added
+               alpha=0.8, label=f"relaxed \u03bb = C10/2 ({relaxed_median:,.0f} km\u00b2)")
     ax.legend(frameon=True, loc="upper right")
 
     nice_time_axis(ax)
     ax.set_xlabel("Time")
-    ax.set_ylabel("λ  —  saturating length scale  (km²)")
-    ax.set_title(
-        f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  —  "
-        f"representativeness length scale λ over time{extra_title}",
-        fontsize=TITLE_SIZE,
-    )
+    ax.set_ylabel("\u03bb  \u2014  saturating length scale  (km\u00b2)")
+    ax.set_title(f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  \u2014  "
+                 f"\u03bb over time{extra_title}", fontsize=TITLE_SIZE)
     savefig(f"lambda_timeseries_{STATION_ID}_{variable}_{LAMBDA_DISPLAY}.png")
 
+
 def run_lambda_timeseries(df):
-    print("\n[4/4] Lambda (saturating length scale) time-series")
+    print("\n[4/5] Lambda time-series")
     for var in VARIABLES:
         plot_lambda_timeseries(df, var)
+
+
+# ============================================================
+# PLOT 5: SINGLE-TIMESTEP FIT INSPECTION
+# ============================================================
+
+def _resolve_timestep_row(df):
+    if isinstance(FIT_TIMESTEP, int):
+        if not (0 <= FIT_TIMESTEP < len(df)):
+            raise IndexError(f"FIT_TIMESTEP={FIT_TIMESTEP} outside 0..{len(df)-1}")
+        return df.iloc[FIT_TIMESTEP], FIT_TIMESTEP
+    target = pd.to_datetime(FIT_TIMESTEP)
+    matches = df.index[df["plot_datetime"] == target]
+    if len(matches) == 0:
+        i = (df["plot_datetime"] - target).abs().idxmin()
+        print(f"[INFO] exact timestep not found; using nearest: "
+              f"{df.loc[i, 'plot_datetime']}")
+        return df.loc[i], i
+    return df.loc[matches[0]], matches[0]
+
+
+def plot_single_timestep_fits(df, variable):
+    row, idx = _resolve_timestep_row(df)
+
+    x_obs_cols = [f"area_km2_C{s}" for s in range(1, 11)]
+    y_obs_cols = [f"{variable}_C{s}" for s in range(1, 11)]
+
+    if not all(c in df.columns for c in x_obs_cols):
+        print(f"[skip] area_km2_C columns not in CSV")
+        return
+    if not all(c in df.columns for c in y_obs_cols):
+        print(f"[skip] {variable}_C1..C10 not in CSV; "
+              f"re-run metrics_fit_backfill_area.py to include observed values")
+        return
+
+    x_obs = np.array([row[c] for c in x_obs_cols], dtype=float)
+    y_obs = np.array([row[c] for c in y_obs_cols], dtype=float)
+    x_grid = np.linspace(x_obs.min(), x_obs.max(), 300)
+
+    best = row.get(f"{variable}_best_model_aicc", None)
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    for model in MODELS:
+        y_fit = model_prediction(row, variable, model, x_grid)
+        if not np.any(np.isfinite(y_fit)):
+            continue
+        is_best = (model == best)
+        aicc = row.get(f"{variable}_{model}_aicc", np.nan)
+        label = f"{MODEL_LABELS[model]} (AICc={aicc:.1f})"
+        if is_best:
+            label += "  \u2190 best"
+        ax.plot(x_grid, y_fit,
+                color=MODEL_COLORS[model],
+                linewidth=3.0 if is_best else 1.4,
+                alpha=1.0 if is_best else 0.75,
+                zorder=4 if is_best else 2,
+                label=label)
+
+    ax.scatter(x_obs, y_obs, s=70, color="black", zorder=5,
+               label="observed (C1\u2013C10)")
+
+    ax.set_xlabel("cumulative sector area (km\u00b2)")
+    ax.set_ylabel(VAR_LABELS[variable])
+    ts = row["plot_datetime"]
+    ax.set_title(
+        f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  \u2014  "
+        f"all 7 fits at {ts}  (row {idx})",
+        fontsize=TITLE_SIZE)
+    ax.legend(frameon=True, fontsize=LEGEND_SIZE, loc="best")
+    ts_safe = pd.to_datetime(ts).strftime("%Y%m%d_%H%M")
+    savefig(f"single_fit_{STATION_ID}_{variable}_{ts_safe}.png")
+
+
+def run_single_timestep_fits(df):
+    if not PLOT_SINGLE_FIT:
+        return
+    print("\n[5/5] Single-timestep fit inspection")
+    for var in VARIABLES:
+        plot_single_timestep_fits(df, var)
 
 
 # ============================================================
@@ -664,11 +736,12 @@ def main():
 
     df = load_data()
 
-    #run_slope_timeseries(df)
-    #run_best_model_bars(df)
-    #run_delta_distributions(df)
-    #run_aicc_timeseries(df)
+    run_slope_timeseries(df)
+    run_best_model_bars(df)
+    run_delta_distributions(df)
+    run_aicc_timeseries(df)
     run_lambda_timeseries(df)
+    run_single_timestep_fits(df)
 
     t1 = time.time()
     print("\nEnd:", dt.datetime.fromtimestamp(t1).strftime("%Y-%m-%d %H:%M:%S"))
