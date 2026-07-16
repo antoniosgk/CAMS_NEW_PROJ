@@ -664,7 +664,6 @@ def _resolve_timestep_row(df):
         return df.loc[i], i
     return df.loc[matches[0]], matches[0]
 
-
 def plot_single_timestep_fits(df, variable):
     row, idx = _resolve_timestep_row(df)
 
@@ -693,9 +692,9 @@ def plot_single_timestep_fits(df, variable):
             continue
         is_best = (model == best)
         aicc = row.get(f"{variable}_{model}_aicc", np.nan)
-        label = f"{MODEL_LABELS[model]} (AICc={aicc:.1f})"
-        if is_best:
-            label += "  \u2190 best"
+        label = f"{MODEL_LABELS[model]}" #(AICc={aicc:.1f})
+        #if is_best:
+            #label += "  \u2190 best"
         ax.plot(x_grid, y_fit,
                 color=MODEL_COLORS[model],
                 linewidth=3.0 if is_best else 1.4,
@@ -706,12 +705,23 @@ def plot_single_timestep_fits(df, variable):
     ax.scatter(x_obs, y_obs, s=70, color="black", zorder=5,
                label="observed (C1\u2013C10)")
 
+    # --- 0.4 deg box: dashed vertical line + x-axis label ---
+    box_x = row.get("area_km2_box04", np.nan)
+    if np.isfinite(box_x):
+        ax.axvline(box_x, color="grey", linewidth=1.0,
+                   linestyle="--", alpha=0.6)
+        ax.text(box_x, 0,
+                f"\n{BOX_DEG}\u00b0 \n({box_x:,.0f} km\u00b2)",
+                fontsize=8.5, color="grey",
+                ha="center", va="top",
+                transform=ax.get_xaxis_transform())
+
     ax.set_xlabel("cumulative sector area (km\u00b2)")
     ax.set_ylabel(VAR_LABELS[variable])
     ts = row["plot_datetime"]
     ax.set_title(
         f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  \u2014  "
-        f"all 7 fits at {ts}  (row {idx})",
+        f"all 7 fits at {ts}",
         fontsize=TITLE_SIZE)
     ax.legend(frameon=True, fontsize=LEGEND_SIZE, loc="best")
     ts_safe = pd.to_datetime(ts).strftime("%Y%m%d_%H%M")
@@ -736,11 +746,11 @@ def main():
 
     df = load_data()
 
-    run_slope_timeseries(df)
-    run_best_model_bars(df)
-    run_delta_distributions(df)
-    run_aicc_timeseries(df)
-    run_lambda_timeseries(df)
+    #run_slope_timeseries(df)
+    #run_best_model_bars(df)
+    #run_delta_distributions(df)
+    #run_aicc_timeseries(df)
+    #run_lambda_timeseries(df)
     run_single_timestep_fits(df)
 
     t1 = time.time()

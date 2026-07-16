@@ -32,19 +32,19 @@ SPECIES = "O3"
 #   "single"     -> use STATION_ID
 #   "name_list"  -> use STATION_IDS
 #   "all"        -> process every *_sector_ratio_cv_fits_with_aic.csv in IN_DIR
-SELECTION_MODE = "single"       # one station via STATION_ID
+#SELECTION_MODE = "single"       # one station via STATION_ID
 #SELECTION_MODE = "name_list"    # explicit names via STATION_IDS
-#SELECTION_MODE = "idx_range"    # numeric index range via IDX_MIN / IDX_MAX
+SELECTION_MODE = "idx_range"    # numeric index range via IDX_MIN / IDX_MAX
 #SELECTION_MODE = "all"          # every *_with_aic.csv in IN_DIR
 
-IDX_MIN = 1       # inclusive, used when SELECTION_MODE == "idx_range"
-IDX_MAX = 100     # inclusive
+IDX_MIN = 501      # inclusive, used when SELECTION_MODE == "idx_range"
+IDX_MAX = 600    # inclusive
 
 STATION_ID  = "1003A"
 STATION_IDS = ["1001A", "1002A", "1003A", "1004A", "1006A"]
 
 # If True, skip stations whose output file already exists
-SKIP_EXISTING = False
+SKIP_EXISTING = True
 
 # Variables to fit
 VARIABLES = ["ratio", "cv_w", "mean_w"]
