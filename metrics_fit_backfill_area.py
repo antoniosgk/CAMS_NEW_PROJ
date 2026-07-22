@@ -7,6 +7,17 @@ Supports three selection modes:
     SELECTION_MODE = "all"        -> all *_sector_ratio_cv_fits_with_aic.csv in IN_DIR
 
 Output: one CSV per station in OUT_DIR:  {station}_{SPECIES}_area_fits.csv
+
+Variable scaling
+----------------
+  ratio  : fitted as-is (dimensionless, station / sector-mean)
+  cv_w   : multiplied by 100 before fitting → all cv_w fit outputs are in CV %
+            Invariant quantities are unaffected by this scaling:
+              r2, adj_r2, aic, aicc, bic, delta_*, best_model_*  (unchanged)
+              cv_w_exponential_b  (growth rate, dimensionless)
+              cv_w_power_b        (exponent, dimensionless)
+              cv_w_saturating_c   (λ, km² — the SR e-folding area scale)
+  mean_w : fitted as-is (ppb)
 """
 
 from pathlib import Path
@@ -34,11 +45,11 @@ SPECIES = "O3"
 #   "all"        -> process every *_sector_ratio_cv_fits_with_aic.csv in IN_DIR
 #SELECTION_MODE = "single"       # one station via STATION_ID
 #SELECTION_MODE = "name_list"    # explicit names via STATION_IDS
-SELECTION_MODE = "idx_range"    # numeric index range via IDX_MIN / IDX_MAX
-#SELECTION_MODE = "all"          # every *_with_aic.csv in IN_DIR
+#SELECTION_MODE = "idx_range"    # numeric index range via IDX_MIN / IDX_MAX
+SELECTION_MODE = "all"          # every *_with_aic.csv in IN_DIR
 
-IDX_MIN = 501      # inclusive, used when SELECTION_MODE == "idx_range"
-IDX_MAX = 600    # inclusive
+IDX_MIN = 1850      # inclusive, used when SELECTION_MODE == "idx_range"
+IDX_MAX = 1900    # inclusive
 
 STATION_ID  = "1003A"
 STATION_IDS = ["1001A", "1002A", "1003A", "1004A", "1006A"]
@@ -491,6 +502,8 @@ def process_station(station_id, in_path, out_path):
 
         for var in VARIABLES:
             y = y_mats[var][i]
+            if var == "cv_w":
+                y = y * 100.0   # convert CV fraction → CV %
             for s_idx, s_num in enumerate(SECTORS):
                 row[f"{var}_C{s_num}"] = y[s_idx]
             row.update(fit_all_models_for_variable(x, y, var))
