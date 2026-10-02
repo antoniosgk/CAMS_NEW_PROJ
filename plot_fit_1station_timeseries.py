@@ -143,7 +143,7 @@ COMPANION = {
 
 COMPANION_COLOR = "#555555"
 SLOPE_COLOR_FOR_MODEL = lambda m: MODEL_COLORS[m]
-VAR_LABELS = {"ratio": "ratio", "cv_w": "CV", "mean_w": "mean (ppb)"}
+VAR_LABELS = {"ratio": "ratio", "cv_w": "CV (%)", "mean_w": "mean (ppb)"}
 
 
 # ============================================================
@@ -746,12 +746,12 @@ def main():
 
     df = load_data()
 
-    #run_slope_timeseries(df)
+    run_slope_timeseries(df)
     #run_best_model_bars(df)
     #run_delta_distributions(df)
     #run_aicc_timeseries(df)
     #run_lambda_timeseries(df)
-    run_single_timestep_fits(df)
+    #run_single_timestep_fits(df)
 
     t1 = time.time()
     print("\nEnd:", dt.datetime.fromtimestamp(t1).strftime("%Y-%m-%d %H:%M:%S"))

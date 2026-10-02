@@ -13,12 +13,12 @@ warnings.filterwarnings("ignore")
 # ============================================================
 # USER SETTINGS
 # ============================================================
-
-NC_DIR = Path("/mnt/store01/agkiokas/CAMS/inst/subsets/O3/")
-NC_GLOB = "*.nc*"
 VAR_NAME = "O3"
+NC_DIR = Path("/mnt/store01/agkiokas/CAMS/inst/subsets/{VAR_NAME}")
+NC_GLOB = "*.nc*"
+#VAR_NAME = "O3"
 
-OUT_FILE = Path("/mnt/store01/agkiokas/CAMS/O3_gridded_pooled_cv.nc")
+OUT_FILE = Path("/mnt/store01/agkiokas/CAMS/{VAR_NAME}_gridded_pooled_cv.nc")
 
 SECTORS = [f"C{i}" for i in range(1, 11)]
 LEVELS_TO_KEEP = None
