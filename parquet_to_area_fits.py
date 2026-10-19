@@ -69,8 +69,8 @@ SPECIES = "O3"
 #SELECTION_MODE = "idx_range"    # numeric index range via IDX_MIN / IDX_MAX
 SELECTION_MODE = "idx_range"           # every *_{SPECIES}_A_30min.parquet in IN_DIR
 
-IDX_MIN = 1501       # inclusive, used when SELECTION_MODE == "idx_range"
-IDX_MAX = 2000     # inclusive
+IDX_MIN = 0       # inclusive, used when SELECTION_MODE == "idx_range"
+IDX_MAX = 2027     # inclusive
 
 STATION_ID  = "1003A"
 STATION_IDS = ["1001A", "1002A", "1003A", "1004A", "1006A"]

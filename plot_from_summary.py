@@ -57,7 +57,7 @@ MODELS    = ["linear", "quadratic", "cubic", "logarithmic",
              "exponential", "power", "saturating"]
 CRITERIA  = ["r2", "adj_r2", "aic", "aicc", "bic"]
 
-VAR_LABELS  = {"ratio": "Concentration Ratio", "cv_w": "Weighted CV (%)"}
+VAR_LABELS  = {"ratio": "Concentration Ratio Cx/Co", "cv_w": " CV (%)"}
 CRIT_LABELS = {
     "r2":     r"$R^2$",
     "adj_r2": r"Adj-$R^2$",
@@ -623,16 +623,16 @@ def main():
     df_stations, df_counts = _load_data()
 
     print("\n--- Type 1: global (station × timestep) barplots ---")
-    #plot_type1_barplots(df_stations, df_counts)
+    plot_type1_barplots(df_stations, df_counts)
 
     print("\n--- Type 2: station-level modal winner barplots ---")
-    #plot_type2_barplots(df_stations, df_counts)
+    plot_type2_barplots(df_stations, df_counts)
 
     print("\n--- Maps Option A: colour + size ---")
     plot_maps_option_a(df_stations, df_counts)
 
     print("\n--- Maps Option C: colour + edge linewidth ---")
-    plot_maps_option_c(df_stations, df_counts)
+    #plot_maps_option_c(df_stations, df_counts)
 
     print("\n--- Maps Option E: contour background + circles ---")
     #plot_maps_option_e(df_stations, df_counts)

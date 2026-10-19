@@ -9,7 +9,8 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import os
 import time
-
+plt.rcParams["font.weight"] = "bold"
+plt.rcParams["axes.labelweight"] = "bold"
 from file_utils import (
     base_path, product, species, stations_path,
     species_file, T_file, pl_file, RH_file, orog_file,
@@ -64,7 +65,7 @@ print("START_DT:", START_DT)
 print("END_DT:", END_DT)
 print("Generated timestamps:", list(iter_timestamps(START_DT, END_DT, 30)))
 # Mode works for BOTH single timestep and period
-MODE = "HEIGHT"          # "A" or "HEIGHT"
+MODE = "A"          # "A" or "HEIGHT"
 idx = 5    #index of the station
 cell_nums = 10
 dist_bins_km = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]

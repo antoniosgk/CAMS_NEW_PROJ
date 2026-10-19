@@ -1,4 +1,3 @@
-
 #%%
 """
 Plot the area-based multi-model fit results produced by metrics_fit_backfill_area.py.
@@ -23,6 +22,8 @@ import matplotlib.dates as mdates
 import matplotlib.ticker as mticker
 import time
 import datetime as dt
+plt.rcParams["font.weight"] = "bold"
+plt.rcParams["axes.labelweight"] = "bold"
 
 # ============================================================
 # USER SETTINGS
@@ -33,13 +34,22 @@ OUT_DIR = Path("/mnt/store01/agkiokas/CAMS/area_fit_plots")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 SPECIES    = "O3"
-STATION_ID = "1002A"
-CSV_FILENAME = f"{STATION_ID}_{SPECIES}_area_fits.csv"
+STATION_ID = "1006A"
+CSV_FILENAME = f"{STATION_ID}_{SPECIES}_area_fits_new.csv"
 
 # ------------------------------------------------------------
 # Plot 1 — slope time-series layout
 # ------------------------------------------------------------
-PLOT_LAYOUT = "stacked"      # "stacked" | "separate"
+PLOT_LAYOUT    = "separate"      # "stacked" | "separate"
+PLOT_COMPANION = False          # False = hide the right-axis companion parameter
+
+# ------------------------------------------------------------
+# Slope time-series Y-axis limits (None = auto)
+#   Set per variable, e.g.:
+#   SLOPE_YLIM = {"ratio": (-0.0001, 0.0001), "cv_w": None}
+#   or set to None to auto-scale all variables.
+# ------------------------------------------------------------
+SLOPE_YLIM = {"ratio": (-0.00005,0.00005), "cv_w": (0,0.004)}
 
 # ------------------------------------------------------------
 # Slope mode for the slope time-series plots
@@ -65,7 +75,12 @@ LAMBDA_RELAXED_FRAC = 1 / 2
 # FIT_TIMESTEP: int row index (0-based) or datetime string
 # ------------------------------------------------------------
 PLOT_SINGLE_FIT = True
-FIT_TIMESTEP    = 0
+FIT_TIMESTEP    = "2005-05-20 03:00"
+#FIT_TIMESTEP=0
+FIT_LIMS = {
+    "ratio": {"xlim": None, "ylim": (0.992,1.000 )},
+    "cv_w":  {"xlim": None, "ylim": (0, 0.8)},
+}
 
 # ------------------------------------------------------------
 # Time range
@@ -86,10 +101,21 @@ MIN_N_SECTORS = 8
 # Figure settings
 # ------------------------------------------------------------
 DPI         = 300
-TITLE_SIZE  = 15
+TITLE_SIZE  = 16
 LABEL_SIZE  = 12
-TICK_SIZE   = 10
-LEGEND_SIZE = 9
+TICK_SIZE   = 16
+LEGEND_SIZE = 16
+LINE_WIDTH  = 1.8            # curve thickness (bold)
+TICK_WEIGHT = "bold"          # tick label weight
+BG_COLOR    = "gainsboro"     # axes background color
+TICK_WEIGHT = "bold"
+# ------------------------------------------------------------
+# Station metadata columns in the CSV
+#   Used for title: station name, altitude, coordinates
+#   The script reads these from the area_fits CSV itself.
+#   Columns expected: station_lat, station_lon, station_alt
+#   Optional: station (station name)
+# ------------------------------------------------------------
 
 # ============================================================
 # STYLE
@@ -109,6 +135,7 @@ plt.rcParams.update({
     "grid.linestyle":     "-",
     "axes.spines.top":    False,
     "axes.spines.right":  False,
+    "axes.facecolor":     BG_COLOR,
 })
 
 # ============================================================
@@ -131,19 +158,19 @@ MODEL_COLORS = {
 }
 
 COMPANION = {
-    "linear":      ("a", "intercept a",            "y = a + b\u00b7x"),
-    "quadratic":   ("c", "curvature c",            "y = a + b\u00b7x + c\u00b7x\u00b2"),
-    "cubic":       ("d", "cubic coeff. d",         "y = a + b\u00b7x + c\u00b7x\u00b2 + d\u00b7x\u00b3"),
-    "logarithmic": ("a", "intercept a",            "y = a + b\u00b7ln(x)"),
-    "exponential": ("c", "rate c (1/km\u00b2)",    "y = a + b\u00b7exp(c\u00b7x)"),
-    "power":       ("b", "exponent b",             "y = a\u00b7x^b"),
-    "saturating":  ("c", "length scale \u03bb (km\u00b2)",
-                    "y = a + b\u00b7(1 \u2212 exp(\u2212x/\u03bb))"),
+    "linear":      ("a", "intercept a",            "y = a + b·x"),
+    "quadratic":   ("c", "curvature c",            "y = a + b·x + c·x²"),
+    "cubic":       ("d", "cubic coeff. d",         "y = a + b·x + c·x² + d·x³"),
+    "logarithmic": ("a", "intercept a",            "y = a + b·ln(x)"),
+    "exponential": ("c", "rate c (1/km²)",    "y = a + b·exp(c·x)"),
+    "power":       ("b", "exponent b",             "y = a·x^b"),
+    "saturating":  ("c", "length scale λ (km²)",
+                    "y = a + b·(1 − exp(−x/λ))"),
 }
 
 COMPANION_COLOR = "#555555"
 SLOPE_COLOR_FOR_MODEL = lambda m: MODEL_COLORS[m]
-VAR_LABELS = {"ratio": "ratio", "cv_w": "CV (%)", "mean_w": "mean (ppb)"}
+VAR_LABELS = {"ratio": "Ratio", "cv_w": "CV (%)", "mean_w": "mean (ppb)"}
 
 
 # ============================================================
@@ -153,7 +180,7 @@ VAR_LABELS = {"ratio": "ratio", "cv_w": "CV (%)", "mean_w": "mean (ppb)"}
 def savefig(name):
     path = OUT_DIR / name
     plt.tight_layout()
-    plt.savefig(path, bbox_inches="tight", dpi=DPI)
+    plt.savefig(path, bbox_inches="tight", dpi=DPI, facecolor="white")
     plt.close()
     print(f"Saved: {path.name}")
 
@@ -186,11 +213,56 @@ def nice_time_axis(ax):
     formatter = mdates.ConciseDateFormatter(locator)
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(formatter)
-    ax.tick_params(axis="x", rotation=0)
+    ax.tick_params(axis="x", rotation=45)
+    plt.setp(ax.get_xticklabels(), ha="right")
+
+
+def bold_ticks(ax):
+    """Make tick labels bold on both axes."""
+    for label in ax.get_xticklabels() + ax.get_yticklabels():
+        label.set_fontweight(TICK_WEIGHT)
+
+
+def tight_x(ax, times):
+    """Remove white space on the left and right of the time axis."""
+    t_min, t_max = times.min(), times.max()
+    if pd.notna(t_min) and pd.notna(t_max):
+        ax.set_xlim(t_min, t_max)
 
 
 def clean(s):
     return pd.to_numeric(s, errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+
+def build_station_title(df):
+    """
+    Build a title string with station name, altitude, and coordinates
+    from the CSV metadata columns.
+    """
+    parts = [f"{SPECIES} | {STATION_ID}"]
+
+    # Station name (if available and different from ID)
+    if "station" in df.columns:
+        name = str(df["station"].iloc[0])
+        if name and name != STATION_ID:
+            parts[0] = f"{SPECIES} | {STATION_ID} ({name})"
+
+    # Coordinates
+    lat = df.get("station_lat", df.get("model_lat", pd.Series(dtype=float)))
+    lon = df.get("station_lon", df.get("model_lon", pd.Series(dtype=float)))
+    if len(lat) > 0 and pd.notna(lat.iloc[0]) and len(lon) > 0 and pd.notna(lon.iloc[0]):
+        lat_v = float(lat.iloc[0])
+        lon_v = float(lon.iloc[0])
+        lat_h = "N" if lat_v >= 0 else "S"
+        lon_h = "E" if lon_v >= 0 else "W"
+        parts.append(f"{abs(lat_v):.2f}°{lat_h}, {abs(lon_v):.2f}°{lon_h}")
+
+    # Altitude
+    if "station_alt" in df.columns and pd.notna(df["station_alt"].iloc[0]):
+        alt = float(df["station_alt"].iloc[0])
+        parts.append(f"{alt:.0f} m a.s.l.")
+
+    return "  |  ".join(parts)
 
 
 def load_data():
@@ -247,7 +319,7 @@ def resolve_slope_x(df):
     For 'chord' returns (None, label, False).
     """
     if SLOPE_MODE == "chord":
-        return None, "average slope C1\u2192C10", False
+        return None, "average slope C1→C10", False
 
     if SLOPE_MODE == "box04":
         if "area_km2_box04" in df.columns:
@@ -258,10 +330,10 @@ def resolve_slope_x(df):
             phi_n = np.radians(lat + BOX_DEG / 2.0)
             R = 6371.0088
             x_star = R**2 * (np.sin(phi_n) - np.sin(phi_s)) * np.radians(BOX_DEG)
-        label = f"dy/dx at {x_star:,.0f} km\u00b2 ({BOX_DEG}\u00b0 box)"
+        label = f"dy/dx at {x_star:,.0f} km² ({BOX_DEG}° box)"
     elif SLOPE_MODE == "custom":
         x_star = float(SLOPE_AT_KM2)
-        label = f"dy/dx at {x_star:,.0f} km\u00b2"
+        label = f"dy/dx at {x_star:,.0f} km²"
     else:
         raise ValueError(f"Invalid SLOPE_MODE: {SLOPE_MODE!r}")
 
@@ -271,9 +343,9 @@ def resolve_slope_x(df):
         x_hi = float(df["area_km2_C10"].iloc[0])
         if not (x_lo <= x_star <= x_hi):
             out_of_range = True
-            print(f"[WARNING] x* = {x_star:,.0f} km\u00b2 is outside "
+            print(f"[WARNING] x* = {x_star:,.0f} km² is outside "
                   f"[{x_lo:,.0f}, {x_hi:,.0f}] — extrapolation.")
-            label += "  (out of C1\u2013C10 range)"
+            label += "  (out of C1–C10 range)"
     return x_star, label, out_of_range
 
 
@@ -332,30 +404,44 @@ def _plot_slope_panel(ax, df, variable, model):
 
     slope_color = SLOPE_COLOR_FOR_MODEL(model)
     ax.plot(sub["plot_datetime"], slope_vals,
-            color=slope_color, linewidth=0.9, alpha=0.9,
+            color=slope_color, linewidth=LINE_WIDTH, alpha=0.9,
             label=f"{slope_label}")
     ax.axhline(0, color="black", linewidth=0.6, linestyle="--", alpha=0.5)
-    ax.set_ylabel(f"{VAR_LABELS[variable]}  (per km\u00b2)",
+    ax.set_ylabel(f"{VAR_LABELS[variable]}  (per km²)",
                   color=slope_color)
     ax.tick_params(axis="y", colors=slope_color)
     ax.spines["left"].set_color(slope_color)
 
-    ax2 = ax.twinx()
-    if comp_col in df.columns:
-        comp_vals = clean(sub[comp_col])
-        ax2.plot(sub["plot_datetime"], comp_vals,
-                 color=COMPANION_COLOR, linewidth=0.9, alpha=0.7,
-                 label=comp_label)
-    ax2.set_ylabel(comp_label, color=COMPANION_COLOR)
-    ax2.tick_params(axis="y", colors=COMPANION_COLOR)
-    ax2.spines["right"].set_visible(True)
-    ax2.spines["right"].set_color(COMPANION_COLOR)
-    ax2.spines["top"].set_visible(False)
-    ax2.grid(False)
+    # Apply SLOPE_YLIM if set for this variable
+    ylim = SLOPE_YLIM.get(variable)
+    if ylim is not None:
+        ax.set_ylim(ylim)
+
+    # Remove white space on x-axis
+    tight_x(ax, sub["plot_datetime"])
+
+    # Bold ticks
+    bold_ticks(ax)
+
+    if PLOT_COMPANION:
+        ax2 = ax.twinx()
+        if comp_col in df.columns:
+            comp_vals = clean(sub[comp_col])
+            ax2.plot(sub["plot_datetime"], comp_vals,
+                     color=COMPANION_COLOR, linewidth=LINE_WIDTH, alpha=0.7,
+                     label=comp_label)
+        ax2.set_ylabel(comp_label, color=COMPANION_COLOR)
+        ax2.tick_params(axis="y", colors=COMPANION_COLOR)
+        ax2.spines["right"].set_visible(True)
+        ax2.spines["right"].set_color(COMPANION_COLOR)
+        ax2.spines["top"].set_visible(False)
+        ax2.grid(False)
+        bold_ticks(ax2)
 
 
 def plot_slope_timeseries_stacked(df):
     _, slope_label, _ = resolve_slope_x(df)
+    station_title = build_station_title(df)
     for model in MODELS:
         fig, axes = plt.subplots(len(VARIABLES), 1, figsize=(13, 9), sharex=True)
         if len(VARIABLES) == 1:
@@ -364,29 +450,50 @@ def plot_slope_timeseries_stacked(df):
             _plot_slope_panel(ax, df, var, model)
             ax.set_title(f"{VAR_LABELS[var]}", loc="left", fontsize=LABEL_SIZE)
         nice_time_axis(axes[-1])
+
+        if PLOT_COMPANION:
+            subtitle = f"{slope_label} (left) + {COMPANION[model][1]} (right)"
+        else:
+            subtitle = slope_label
         fig.suptitle(
-            f"{SPECIES} | {STATION_ID} | {MODEL_LABELS[model]} fit: "
-            f"{COMPANION[model][2]}\n"
-            f"{slope_label} (left) + {COMPANION[model][1]} (right)",
+            f"{station_title}\n{MODEL_LABELS[model]} fit: "
+            f"{COMPANION[model][2]}  |  {subtitle}",
             fontsize=TITLE_SIZE, y=1.00,
         )
-        savefig(f"slope_stacked_{STATION_ID}_{model}_{SLOPE_MODE}.png")
+
+        if PLOT_COMPANION:
+            savefig(f"slope_stacked_{STATION_ID}_{model}_{SLOPE_MODE}_twin_y.png")
+        else:
+            savefig(f"slope_stacked_{STATION_ID}_{model}_{SLOPE_MODE}.png")
 
 
 def plot_slope_timeseries_separate(df):
     _, slope_label, _ = resolve_slope_x(df)
+    station_title = build_station_title(df)
     for model in MODELS:
         for var in VARIABLES:
             fig, ax = plt.subplots(figsize=(13, 5))
             _plot_slope_panel(ax, df, var, model)
             nice_time_axis(ax)
+
+            if PLOT_COMPANION:
+                subtitle = f"{slope_label} (left) + {COMPANION[model][1]} (right)"
+            else:
+                subtitle = slope_label
+            '''
             ax.set_title(
-                f"{SPECIES} | {STATION_ID} | {MODEL_LABELS[model]} on "
-                f"{VAR_LABELS[var]}: {COMPANION[model][2]}\n"
-                f"{slope_label} (left) + {COMPANION[model][1]} (right)",
+                f"{station_title}\n {MODEL_LABELS[model]} on ",
+                #f"{VAR_LABELS[var]}: {COMPANION[model][2]}  |  {subtitle}",
                 fontsize=TITLE_SIZE,
-            )
-            savefig(f"slope_separate_{STATION_ID}_{model}_{var}_{SLOPE_MODE}.png")
+            )'''
+            ax.set_title(
+                            f"{station_title}",
+                            fontsize=TITLE_SIZE,
+                        )
+            if PLOT_COMPANION:
+                savefig(f"slope_separate_{STATION_ID}_{model}_{var}_{SLOPE_MODE}_twin_y.png")
+            else:
+                savefig(f"slope_separate_{STATION_ID}_{model}_{var}_{SLOPE_MODE}.png")
 
 
 def run_slope_timeseries(df):
@@ -437,24 +544,27 @@ def plot_best_model_bar(df, variable, criterion):
     colors  = [MODEL_COLORS[m] for m in MODELS]
     labels  = [MODEL_LABELS[m] for m in MODELS]
 
+    station_title = build_station_title(df)
+
     fig, ax = plt.subplots(figsize=(11, 6))
     bars = ax.bar(labels, pct, color=colors, alpha=0.85, width=0.65)
     for bar, p in zip(bars, pct):
         if p > 0:
             ax.text(bar.get_x() + bar.get_width()/2, p + 0.6,
                     f"{p:.1f}%", ha="center", va="bottom",
-                    fontsize=10, fontweight="bold")
+                    fontsize=12, fontweight="bold")
 
-    crit_pretty = {"r2": "R\u00b2", "adj_r2": "adjusted R\u00b2",
+    crit_pretty = {"r2": "R²", "adj_r2": "adjusted R²",
                    "aic": "AIC", "aicc": "AICc", "bic": "BIC"}[criterion]
     direction = "highest" if criterion in ("r2", "adj_r2") else "lowest"
     ax.set_ylim(0, max(pct) * 1.15 if max(pct) > 0 else 1)
     ax.set_ylabel(f"% timesteps with {direction} {crit_pretty}")
     ax.set_xlabel("Fitted model")
-    ax.set_title(f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  \u2014  "
+    ax.set_title(f"{station_title}\n{VAR_LABELS[variable]}  —  "
                  f"best model by {crit_pretty}  ({total:,} timesteps)",
                  fontsize=TITLE_SIZE)
     plt.xticks(rotation=15, ha="right")
+    bold_ticks(ax)
     savefig(f"barplot_best_{criterion}_{STATION_ID}_{variable}.png")
 
 
@@ -476,9 +586,11 @@ def plot_delta_distribution(df, variable, criterion):
         print(f"[skip] no delta_{criterion} columns for {variable}")
         return
 
-    crit_pretty = {"r2": "R\u00b2", "adj_r2": "adj. R\u00b2",
+    crit_pretty = {"r2": "R²", "adj_r2": "adj. R²",
                    "aic": "AIC", "aicc": "AICc", "bic": "BIC"
                    }.get(criterion, criterion.upper())
+
+    station_title = build_station_title(df)
 
     data, labels, colors, means = [], [], [], []
     for m in MODELS:
@@ -504,7 +616,7 @@ def plot_delta_distribution(df, variable, criterion):
 
     x_pos = np.arange(1, len(means) + 1)
     ax.scatter(x_pos, means, marker="D", s=65, color="black",
-               zorder=5, label="mean \u0394")
+               zorder=5, label="mean Δ")
     for xp, mv in zip(x_pos, means):
         if np.isfinite(mv):
             ax.text(xp, mv + max(m for m in means if np.isfinite(m)) * 0.025 + 0.3,
@@ -512,19 +624,20 @@ def plot_delta_distribution(df, variable, criterion):
                     fontsize=9.5, fontweight="bold")
 
     if criterion in ("aic", "aicc", "bic"):
-        for ref, txt in ((2, "\u0394 = 2  (indistinguishable)"),
-                         (10, "\u0394 = 10  (decisive)")):
+        for ref, txt in ((2, "Δ = 2  (indistinguishable)"),
+                         (10, "Δ = 10  (decisive)")):
             ax.axhline(ref, color="grey", linewidth=1.0,
                        linestyle="--", alpha=0.65, label=txt)
 
     ax.set_ylim(bottom=0)
     ax.set_xlabel("Fitted model")
-    ax.set_ylabel(f"\u0394{crit_pretty}  (0 = best model)")
-    ax.set_title(f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  \u2014  "
-                 f"\u0394{crit_pretty} distribution across timesteps",
+    ax.set_ylabel(f"Δ{crit_pretty}  (0 = best model)")
+    ax.set_title(f"{station_title}\n{VAR_LABELS[variable]}  —  "
+                 f"Δ{crit_pretty} distribution across timesteps",
                  fontsize=TITLE_SIZE)
     plt.xticks(rotation=15, ha="right")
     ax.legend(frameon=True, loc="upper left")
+    bold_ticks(ax)
     savefig(f"delta_{criterion}_{STATION_ID}_{variable}.png")
 
 
@@ -540,6 +653,7 @@ def run_delta_distributions(df):
 # ============================================================
 
 def plot_aicc_timeseries(df, variable):
+    station_title = build_station_title(df)
     fig, ax = plt.subplots(figsize=(14, 6))
     any_plotted = False
     for model in MODELS:
@@ -549,18 +663,20 @@ def plot_aicc_timeseries(df, variable):
         mask = filter_by_n(df, variable, model)
         vals = clean(df.loc[mask, col])
         ax.plot(df.loc[mask, "plot_datetime"], vals,
-                color=MODEL_COLORS[model], linewidth=0.8, alpha=0.8,
+                color=MODEL_COLORS[model], linewidth=LINE_WIDTH, alpha=0.8,
                 label=MODEL_LABELS[model])
         any_plotted = True
     if not any_plotted:
         plt.close(fig)
         return
     nice_time_axis(ax)
+    tight_x(ax, df["plot_datetime"])
     ax.set_xlabel("Time")
     ax.set_ylabel("AICc  (lower = better)")
-    ax.set_title(f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  \u2014  "
+    ax.set_title(f"{station_title}\n{VAR_LABELS[variable]}  —  "
                  f"AICc time-series", fontsize=TITLE_SIZE)
     ax.legend(ncol=4, frameon=True, loc="best")
+    bold_ticks(ax)
     savefig(f"aicc_timeseries_{STATION_ID}_{variable}.png")
 
 
@@ -579,6 +695,8 @@ def plot_lambda_timeseries(df, variable):
     if col not in df.columns:
         print(f"[skip] no saturating model for {variable}")
         return
+
+    station_title = build_station_title(df)
 
     mask  = filter_by_n(df, variable, "saturating")
     vals  = clean(df.loc[mask, col])
@@ -601,7 +719,7 @@ def plot_lambda_timeseries(df, variable):
         n_dropped = int((~keep).sum())
         pct_drop  = 100.0 * n_dropped / n_total if n_total > 0 else 0.0
         vals      = vals.where(keep)
-        extra_title = f"  |  filtered (\u03bb \u2264 C10/2, {pct_drop:.1f}% dropped)"
+        extra_title = f"  |  filtered (λ ≤ C10/2, {pct_drop:.1f}% dropped)"
     elif LAMBDA_DISPLAY == "clip":
         ax_max = relaxed_median * 4
     elif LAMBDA_DISPLAY != "log":
@@ -609,7 +727,7 @@ def plot_lambda_timeseries(df, variable):
 
     fig, ax = plt.subplots(figsize=(14, 6))
     ax.plot(times, vals, color=MODEL_COLORS["saturating"],
-            linewidth=0.9, alpha=0.9)
+            linewidth=LINE_WIDTH, alpha=0.9)
 
     if LAMBDA_DISPLAY == "clip":
         ax.set_ylim(0, ax_max)
@@ -625,18 +743,20 @@ def plot_lambda_timeseries(df, variable):
     median_val = vals.median()
     if np.isfinite(median_val):
         ax.axhline(median_val, color="black", linewidth=0.8, linestyle=":",
-                   alpha=0.6, label=f"overall median \u03bb = {median_val:,.0f} km\u00b2")
+                   alpha=0.6, label=f"overall median λ = {median_val:,.0f} km²")
     ax.axhline(strict_median,  color="#d62728", linewidth=1.2, linestyle="--",
-               alpha=0.8, label=f"strict \u03bb = C10/3 ({strict_median:,.0f} km\u00b2)")
+               alpha=0.8, label=f"strict λ = C10/3 ({strict_median:,.0f} km²)")
     ax.axhline(relaxed_median, color="#ff7f0e", linewidth=1.2, linestyle="--",
-               alpha=0.8, label=f"relaxed \u03bb = C10/2 ({relaxed_median:,.0f} km\u00b2)")
+               alpha=0.8, label=f"relaxed λ = C10/2 ({relaxed_median:,.0f} km²)")
     ax.legend(frameon=True, loc="upper right")
 
     nice_time_axis(ax)
+    tight_x(ax, times)
     ax.set_xlabel("Time")
-    ax.set_ylabel("\u03bb  \u2014  saturating length scale  (km\u00b2)")
-    ax.set_title(f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  \u2014  "
-                 f"\u03bb over time{extra_title}", fontsize=TITLE_SIZE)
+    ax.set_ylabel("λ  —  saturating length scale  (km²)")
+    ax.set_title(f"{station_title}\n{VAR_LABELS[variable]}  —  "
+                 f"λ over time{extra_title}", fontsize=TITLE_SIZE)
+    bold_ticks(ax)
     savefig(f"lambda_timeseries_{STATION_ID}_{variable}_{LAMBDA_DISPLAY}.png")
 
 
@@ -683,47 +803,58 @@ def plot_single_timestep_fits(df, variable):
     x_grid = np.linspace(x_obs.min(), x_obs.max(), 300)
 
     best = row.get(f"{variable}_best_model_aicc", None)
+    station_title = build_station_title(df)
 
     fig, ax = plt.subplots(figsize=(12, 7))
-
     for model in MODELS:
+        a = row.get(f"{variable}_{model}_a", np.nan)
+        b = row.get(f"{variable}_{model}_b", np.nan)
+        c = row.get(f"{variable}_{model}_c", np.nan)
+        print(f"  {model:15s}  a={a:12.4g}  b={b:12.4g}  c={c:12.4g}")
+
         y_fit = model_prediction(row, variable, model, x_grid)
         if not np.any(np.isfinite(y_fit)):
             continue
         is_best = (model == best)
         aicc = row.get(f"{variable}_{model}_aicc", np.nan)
-        label = f"{MODEL_LABELS[model]}" #(AICc={aicc:.1f})
-        #if is_best:
-            #label += "  \u2190 best"
+        label = f"{MODEL_LABELS[model]}"
         ax.plot(x_grid, y_fit,
                 color=MODEL_COLORS[model],
-                linewidth=3.0 if is_best else 1.4,
-                alpha=1.0 if is_best else 0.75,
-                zorder=4 if is_best else 2,
+                linewidth=LINE_WIDTH,
+                alpha=0.75,
+                zorder=2,
                 label=label)
 
     ax.scatter(x_obs, y_obs, s=70, color="black", zorder=5,
-               label="observed (C1\u2013C10)")
+               label="observed (C1–C10)")
 
     # --- 0.4 deg box: dashed vertical line + x-axis label ---
     box_x = row.get("area_km2_box04", np.nan)
     if np.isfinite(box_x):
-        ax.axvline(box_x, color="grey", linewidth=1.0,
-                   linestyle="--", alpha=0.6)
+        ax.axvline(box_x, color="grey", linewidth=1.2,
+                   linestyle="--", alpha=0.7)
         ax.text(box_x, 0,
-                f"\n{BOX_DEG}\u00b0 \n({box_x:,.0f} km\u00b2)",
+                f"\n{BOX_DEG}° \n({box_x:,.0f} km²)",
                 fontsize=8.5, color="grey",
                 ha="center", va="top",
                 transform=ax.get_xaxis_transform())
 
-    ax.set_xlabel("cumulative sector area (km\u00b2)")
+    # --- Apply FIT_XLIM / FIT_YLIM if set ---
+    lims = FIT_LIMS.get(variable, {})
+    if lims.get("xlim") is not None:
+        ax.set_xlim(lims["xlim"])
+    if lims.get("ylim") is not None:
+        ax.set_ylim(lims["ylim"])
+
+    ax.set_xlabel("Sector Area (km²)")
     ax.set_ylabel(VAR_LABELS[variable])
     ts = row["plot_datetime"]
     ax.set_title(
-        f"{SPECIES} | {STATION_ID} | {VAR_LABELS[variable]}  \u2014  "
+        f"{station_title}\n{VAR_LABELS[variable]}  —  "
         f"all 7 fits at {ts}",
         fontsize=TITLE_SIZE)
     ax.legend(frameon=True, fontsize=LEGEND_SIZE, loc="best")
+    bold_ticks(ax)
     ts_safe = pd.to_datetime(ts).strftime("%Y%m%d_%H%M")
     savefig(f"single_fit_{STATION_ID}_{variable}_{ts_safe}.png")
 

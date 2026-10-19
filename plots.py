@@ -15,6 +15,8 @@ import re
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 import matplotlib as mpl
 import pandas as pd
+plt.rcParams["font.weight"] = "bold"
+plt.rcParams["axes.labelweight"] = "bold"
 
 def _gradual_reds(n, cmap_name="Reds", start=0.25, end=0.95):
     """

@@ -38,7 +38,7 @@ import pandas as pd
 # ============================================================
 
 CSV_DIR    = Path("/mnt/store01/agkiokas/CAMS/fit_outputs")
-OUT_DIR    = CSV_DIR / "summary"
+OUT_DIR    = CSV_DIR / "summary_new"
 CSV_SUFFIX = "_O3_area_fits.csv"
 
 VARIABLES = ["ratio", "cv_w"]

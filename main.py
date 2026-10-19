@@ -71,7 +71,7 @@ MODE = "A"          # "A" or "HEIGHT"
 #   "all"    -> all valid stations
 STATION_SELECTION = "single"
 
-STATION_IDX = 1002
+STATION_IDX = 1006
 STATION_IDXS = [1, 5, 8]
 
 # lookup generation selection mode:
