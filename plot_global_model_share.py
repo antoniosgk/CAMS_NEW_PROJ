@@ -36,8 +36,8 @@ matplotlib.rcParams.update({
 # ============================================================
 # CONFIGURATION
 # ============================================================
-
-SUMMARY_DIR = Path("/mnt/store01/agkiokas/CAMS/fit_outputs/summary")
+species="SO2"
+SUMMARY_DIR = Path(f"/mnt/store01/agkiokas/CAMS/fit_outputs/{species}/summary_new")
 COUNTS_CSV  = SUMMARY_DIR / "global_counts.csv"
 STATION_CSV = SUMMARY_DIR / "station_summary.csv"
 OUTPUT_DIR  = SUMMARY_DIR / "plots"

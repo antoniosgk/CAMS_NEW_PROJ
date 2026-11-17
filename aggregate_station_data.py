@@ -36,10 +36,10 @@ import pandas as pd
 # ============================================================
 # CONFIGURATION
 # ============================================================
-
-CSV_DIR    = Path("/mnt/store01/agkiokas/CAMS/fit_outputs")
+VAR_NAME="O3"
+CSV_DIR    = Path(f"/mnt/store01/agkiokas/CAMS/fit_outputs/{VAR_NAME}")
 OUT_DIR    = CSV_DIR / "summary_new"
-CSV_SUFFIX = "_O3_area_fits.csv"
+CSV_SUFFIX = f"_{VAR_NAME}_area_fits_new.csv"
 
 VARIABLES = ["ratio", "cv_w"]
 MODELS    = ["linear", "quadratic", "cubic", "logarithmic",

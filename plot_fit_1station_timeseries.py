@@ -28,13 +28,13 @@ plt.rcParams["axes.labelweight"] = "bold"
 # ============================================================
 # USER SETTINGS
 # ============================================================
-
-IN_DIR  = Path("/mnt/store01/agkiokas/CAMS/fit_outputs")
-OUT_DIR = Path("/mnt/store01/agkiokas/CAMS/area_fit_plots")
+SPECIES    = "O3"
+IN_DIR  = Path(f"/mnt/store01/agkiokas/CAMS/fit_outputs/{SPECIES}")
+OUT_DIR = Path(f"/mnt/store01/agkiokas/CAMS/area_fit_plots/{SPECIES}")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-SPECIES    = "O3"
-STATION_ID = "1006A"
+
+STATION_ID = "1002A"
 CSV_FILENAME = f"{STATION_ID}_{SPECIES}_area_fits_new.csv"
 
 # ------------------------------------------------------------
@@ -49,7 +49,7 @@ PLOT_COMPANION = False          # False = hide the right-axis companion paramete
 #   SLOPE_YLIM = {"ratio": (-0.0001, 0.0001), "cv_w": None}
 #   or set to None to auto-scale all variables.
 # ------------------------------------------------------------
-SLOPE_YLIM = {"ratio": (-0.00005,0.00005), "cv_w": (0,0.004)}
+SLOPE_YLIM = {"ratio": (None,None), "cv_w": (0,None)}
 
 # ------------------------------------------------------------
 # Slope mode for the slope time-series plots
@@ -78,8 +78,8 @@ PLOT_SINGLE_FIT = True
 FIT_TIMESTEP    = "2005-05-20 03:00"
 #FIT_TIMESTEP=0
 FIT_LIMS = {
-    "ratio": {"xlim": None, "ylim": (0.992,1.000 )},
-    "cv_w":  {"xlim": None, "ylim": (0, 0.8)},
+    "ratio": {"xlim": None, "ylim": (0.5,5 )},
+    "cv_w":  {"xlim": None, "ylim": (0, 200)},
 }
 
 # ------------------------------------------------------------

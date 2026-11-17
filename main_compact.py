@@ -1,13 +1,29 @@
 #THIS IS THE NEW COMPACT VERSION
 #SUPORTS ONLY MODE='A' AND TIME_INTERVAL_ANALYSIS
 #PRODUCES NO PLOTS.ONLY OBJECTIVE IS TO CREATE CSV/PARQUET FILES FOR EACH STATION
+#
+# v2 changes (2026-11):
+#   - Autodetects columnar (2D) vs 3D fields from the variable's dims.
+#     For a columnar field (e.g. AOT / TOTEXTTAU, dims time,lat,lon):
+#       * only horizontal collocation is done (no vertical level)
+#       * the constant-k and level-timestep lookups are NOT loaded/needed
+#       * no MMR->ppb conversion (value stored raw into center_ppb / stats)
+#       * k_star_center and z_target_m are NaN
+#     Just set product="inst2d", species="AOT" and the script handles it.
+#   - Timestep-first engine now reads each distinct level-plane ONCE per file
+#     and slices every station's box from it in memory (instead of one strided
+#     disk read per station). Identical numbers, much faster for station lists.
+#     For columnar fields this is a single plane per file.
+#   - C0 is still INCLUDED in the cumulative sector masks (unchanged, by design).
+#   - center_ppb schema unchanged.
 
 #%%
 # ============================================================
 # Compact period-only script with:
 #   - baseline station-first run_time_interval
 #   - faster timestep-first run_time_interval_timestep_first
-#   - hybrid constant-k / timestep-k logic
+#   - hybrid constant-k / timestep-k logic (3D only)
+#   - columnar (2D) horizontal-only path
 #   - old-vs-new comparison helpers
 # ============================================================
 
@@ -23,6 +39,14 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import xarray as xr
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+try:
+    from tqdm import tqdm
+    _HAVE_TQDM = True
+except Exception:  # tqdm optional; falls back to periodic text progress
+    _HAVE_TQDM = False
 
 
 # ============================================================
@@ -38,9 +62,9 @@ END_DT   = dt.datetime(2007, 6, 16, 0, 0)
 
 MODE = "A"                   # only "A" implemented in this compact script
 
-STATION_SELECTION = "single"    # "single", "list", "all"
-STATION_IDX = 80
-STATION_IDXS = [i for i in range(538, 550)]
+STATION_SELECTION = "all"      # "single", "list", "all"
+STATION_IDX = 1
+STATION_IDXS = [i for i in range(1800, 2050)]
 
 STEP_MINUTES = 30
 CELL_NUMS = 10
@@ -50,17 +74,40 @@ WEIGHTED = True
 SAVE_CSV = False
 SAVE_PARQUET = True
 
-# Hybrid k lookup
+# Resume: when True, skip any station whose *_30min.parquet already exists AND
+# opens as a valid parquet (readable footer). Half-written files from a killed
+# run are treated as not-done and reprocessed. Default False = always overwrite.
+SKIP_EXISTING = True
+
+# Streaming output (bounded memory): the fast engine writes one parquet per
+# station incrementally, flushing all station buffers once this many rows are
+# buffered in total. Keeps peak RAM ~ MAX_BUFFER_ROWS * ~3 KB per process.
+# Recommended run pattern: parallel tmux batches of <= ~200 stations each
+# (one open writer per station; stays well under the default 1024 FD limit).
+STREAMING_FLUSH = True
+# Primary flush cadence: flush ALL station buffers to parquet every this many
+# processed timesteps, so files grow incrementally and progress is visible.
+FLUSH_EVERY_TIMESTEPS = 2000
+# Safety cap: flush earlier if total buffered rows ever exceed this (guards RAM
+# when many stations are run in one process). Whichever triggers first wins.
+MAX_BUFFER_ROWS = 3_000_000
+SHOW_PROGRESS_BAR = True       # tqdm bar over timesteps (falls back to text if tqdm absent)
+PROGRESS_EVERY_FILES = 2000    # text-fallback: print a progress line every N files
+
+# Hybrid k lookup (ignored for columnar / 2D fields)
 USE_HYBRID_K_LOOKUP = True
 VARIABLE_K_STATIONS = [474, 732, 1001, 1120, 1209, 1324, 1784]
 
 # Paths
+# 3D example : product="inst3d", species="SO2" / "O3"
+# 2D example : product="inst2d", species="AOT"  (variable inside is TOTEXTTAU;
+#              resolved automatically; same horizontal lookup, same cadence)
 base_path = "/mnt/store01/agkiokas/CAMS/inst/subsets"
-product = "inst3d"
-species = "O3"
+product = "inst2d"
+species = "AOT"
 
 stations_path = "/home/agkiokas/CAMS/CHINESE_STATIONS_INFO_2015_2023.txt"
-out_dir = "/mnt/store01/agkiokas/CAMS/stations_parquet/"
+out_dir = f"/mnt/store01/agkiokas/CAMS/stations_parquet/{species}"
 lookup_dir = "/home/agkiokas/CAMS/lookups/"
 
 HORIZONTAL_LOOKUP_PATH = f"{lookup_dir}/station_horizontal_lookup_all.parquet"
@@ -68,6 +115,8 @@ LEVEL_LOOKUP_PATH = f"{lookup_dir}/station_level_timeseries_all.parquet"
 CONSTANT_K_LOOKUP_PATH = f"{lookup_dir}/station_constant_k_only_lookup.csv"
 
 # Optional quick comparison window
+# NOTE: set these to a SHORT window (e.g. a few days) when RUN_COMPARE_OLD_NEW=True,
+# otherwise the validation runs both engines over the full period.
 COMPARE_START_DT = START_DT
 COMPARE_END_DT = END_DT
 
@@ -90,6 +139,9 @@ EXPECTED_COLS = [
     "n_w", "mean_w", "std_w", "cv_w", "median_w", "q1_w", "q3_w", "iqr_w",
 ]
 
+# vertical-dim name candidates used for columnar detection
+VERT_DIM_CANDIDATES = {"lev", "level", "ilev", "nhym", "z", "height"}
+
 
 # ============================================================
 # BASIC HELPERS
@@ -106,6 +158,8 @@ def debug_species_file_structure():
             ds.close()
             return
     print("No species file found in requested period.")
+
+
 def iter_timestamps(start_dt: dt.datetime, end_dt: dt.datetime, step_minutes: int):
     cur = start_dt
     delta = dt.timedelta(minutes=step_minutes)
@@ -322,17 +376,87 @@ def load_level_lookup(path: str) -> pd.DataFrame:
     return df
 
 
-def load_grid_info_once(base_path: str, product: str, species: str, start_dt: dt.datetime, end_dt: dt.datetime, step_minutes: int):
+# ============================================================
+# VARIABLE / DIMENSION RESOLUTION + GEOMETRY DETECTION
+# ============================================================
+
+def get_species_var_name(ds: xr.Dataset, species: str) -> str:
+    """
+    Resolve the main data variable.
+    Priority:
+      1) exact / case variants of `species`
+      2) if only one data var, use it
+      3) the data var that has both lat and lon dims with the most dims
+         (covers AOT files whose variable is TOTEXTTAU, not 'AOT')
+    """
+    candidates = [species, species.upper(), species.lower()]
+    for c in candidates:
+        if c in ds.data_vars:
+            return c
+
+    data_vars = list(ds.data_vars)
+    if len(data_vars) == 1:
+        return data_vars[0]
+
+    def has_latlon(v):
+        dl = [d.lower() for d in ds[v].dims]
+        return any(d in {"lat", "latitude"} for d in dl) and any(d in {"lon", "longitude"} for d in dl)
+
+    latlon_vars = [v for v in data_vars if has_latlon(v)]
+    if latlon_vars:
+        latlon_vars.sort(key=lambda v: ds[v].ndim, reverse=True)
+        return latlon_vars[0]
+
+    raise KeyError(
+        f"Could not infer species variable for '{species}'. "
+        f"Available variables: {data_vars}"
+    )
+
+
+def resolve_dims(da: xr.DataArray) -> dict:
+    """Return {'time','lat','lon','vert'} dim names; vert=None means columnar (2D)."""
+    dims = list(da.dims)
+    time_dim = next((d for d in dims if d.lower() == "time"), None)
+    lat_dim = next((d for d in dims if d.lower() in {"lat", "latitude"}), None)
+    lon_dim = next((d for d in dims if d.lower() in {"lon", "longitude"}), None)
+    vert_dim = next((d for d in dims if d.lower() in VERT_DIM_CANDIDATES), None)
+
+    if lat_dim is None or lon_dim is None:
+        raise ValueError(f"Could not identify lat/lon dims. Found dims: {dims}")
+
+    return {"time": time_dim, "lat": lat_dim, "lon": lon_dim, "vert": vert_dim}
+
+
+def load_grid_info_once(base_path, product, species, start_dt, end_dt, step_minutes):
+    """
+    Open the first available file to grab the grid AND detect geometry
+    (variable name, columnar vs 3D, and dim names). Cached and reused.
+    """
     for d0, t0 in iter_timestamps(start_dt, end_dt, step_minutes):
         spf, _, _, _, _ = build_paths(base_path, product, species, d0, t0)
         if not spf.exists():
             continue
         try:
             ds = xr.open_dataset(spf, decode_times=False)
-            lats = ds["lat"].values
-            lons = ds["lon"].values
+            var = get_species_var_name(ds, species)
+            dim_info = resolve_dims(ds[var])
+            is_columnar = dim_info["vert"] is None
+            lats = ds[dim_info["lat"]].values
+            lons = ds[dim_info["lon"]].values
             ds.close()
-            return {"lats": lats, "lons": lons, "first_found": (d0, t0)}
+            print(
+                f"[grid-info] var='{var}' "
+                f"{'COLUMNAR (2D, horizontal-only)' if is_columnar else '3D (vertical level used)'} "
+                f"dims={dim_info}"
+            )
+            return {
+                "lats": lats,
+                "lons": lons,
+                "first_found": (d0, t0),
+                "var": var,
+                "is_columnar": is_columnar,
+                "dim_info": dim_info,
+            }
         except Exception:
             continue
 
@@ -354,6 +478,7 @@ def make_small_box_indices(i: int, j: int, Ny: int, Nx: int, cell_nums: int):
 
 
 def cumulative_square_masks(ii: int, jj: int, Ny_s: int, Nx_s: int, cell_nums: int):
+    # NOTE: center cell (C0) is intentionally INCLUDED in every mask (unchanged).
     yy, xx = np.indices((Ny_s, Nx_s))
     masks = []
     for k in range(1, cell_nums + 1):
@@ -370,7 +495,7 @@ def compute_w_area_small(lats_small, lons_small, earth_radius_km=EARTH_RADIUS_KM
         raise ValueError("compute_w_area_small expects 1D lats_small and lons_small")
 
     if len(lats_small) < 2 or len(lons_small) < 2:
-        return np.ones((len(lats_small), len(lons_small)),dtype=float)
+        return np.ones((len(lats_small), len(lons_small)), dtype=float)
 
     # approximate cell-area weights on sphere
     dlat = np.abs(np.diff(lats_small).mean())
@@ -404,6 +529,7 @@ def weighted_quantile(x, w, q):
     cw = cw / cw[-1]
 
     return float(np.interp(q, cw, x))
+
 
 def stats_unw(vals):
     vals = np.asarray(vals, dtype=float)
@@ -453,79 +579,52 @@ def stats_w(vals, w):
 
 
 # ============================================================
-# SPECIES EXTRACTION
+# SPECIES EXTRACTION / CONVERSION
 # ============================================================
 
 def to_ppb_mmr(data_arr, species):
     """
     Convert mass mixing ratio (kg/kg) to ppb using MW_air/MW_species * 1e9.
-    Extend MW_map if you add species.
+    Extend MW_map if you add gas species. Columnar fields (e.g. AOT) are
+    dimensionless and bypass this entirely.
     """
     MW_air = 28.9647
-    MW_map = {"O3": 48.0}
+    MW_map = {"O3": 48.0, "SO2": 64.07}
     if species not in MW_map:
         raise ValueError(f"No MW defined for species={species}. Add it to MW_map.")
     return np.asarray(data_arr, dtype=float) * (MW_air / MW_map[species]) * 1e9
 
 
-def get_species_var_name(ds: xr.Dataset, species: str) -> str:
-    candidates = [
-        species,
-        species.upper(),
-        species.lower(),
-    ]
-    for c in candidates:
-        if c in ds.data_vars:
-            return c
-
-    if len(ds.data_vars) == 1:
-        return list(ds.data_vars)[0]
-
-    raise KeyError(
-        f"Could not infer species variable for '{species}'. "
-        f"Available variables: {list(ds.data_vars)}"
-    )
+def read_full_plane(ds_species, var, dim_info, is_columnar, k_star):
+    """
+    Read ONE full horizontal plane (lat,lon) for the given level.
+    For columnar fields k_star is ignored. Used by the fast timestep-first engine.
+    Returns a 2D ndarray ordered (lat, lon).
+    """
+    sel = {}
+    if dim_info["time"] is not None:
+        sel[dim_info["time"]] = 0
+    if not is_columnar:
+        sel[dim_info["vert"]] = int(k_star)
+    da = ds_species[var].isel(sel).transpose(dim_info["lat"], dim_info["lon"])
+    return da.values
 
 
-def extract_smallbox_ppb_optionA_given_k(
-    ds_species: xr.Dataset,
-    species: str,
-    k_star: int,
-    i1_s: int,
-    i2_s: int,
-    j1_s: int,
-    j2_s: int,
-    to_ppb_fn=to_ppb_mmr,
-):
-    var = get_species_var_name(ds_species, species)
-    da = ds_species[var]
-
-    dims = list(da.dims)
-
-    # detect dimensions safely
-    time_dim = next((d for d in dims if d.lower() == "time"), None)
-    lat_dim = next((d for d in dims if d.lower() in {"lat", "latitude"}), None)
-    lon_dim = next((d for d in dims if d.lower() in {"lon", "longitude"}), None)
-
-    vert_candidates = ["lev", "level", "ilev", "nhym", "z", "height"]
-    vert_dim = next((d for d in dims if d.lower() in vert_candidates), None)
-
-    if time_dim is None or lat_dim is None or lon_dim is None or vert_dim is None:
-        raise ValueError(
-            f"Could not identify required dims for variable '{var}'. "
-            f"Found dims: {dims}"
-        )
-
-    arr = da.isel(
-        {
-            time_dim: 0,
-            vert_dim: int(k_star),
-            lat_dim: slice(i1_s, i2_s + 1),
-            lon_dim: slice(j1_s, j2_s + 1),
-        }
-    ).values
-
-    return to_ppb_fn(arr,species)
+def extract_box_given_k(ds_species, var, dim_info, is_columnar, k_star, i1_s, i2_s, j1_s, j2_s):
+    """
+    Read a single station's box directly (box-level isel). Used by the OLD
+    (reference) engine. Returns a 2D ndarray ordered (lat, lon), NOT converted.
+    """
+    sel = {
+        dim_info["lat"]: slice(i1_s, i2_s + 1),
+        dim_info["lon"]: slice(j1_s, j2_s + 1),
+    }
+    if dim_info["time"] is not None:
+        sel[dim_info["time"]] = 0
+    if not is_columnar:
+        sel[dim_info["vert"]] = int(k_star)
+    da = ds_species[var].isel(sel).transpose(dim_info["lat"], dim_info["lon"])
+    return da.values
 
 
 # ============================================================
@@ -535,7 +634,7 @@ def extract_smallbox_ppb_optionA_given_k(
 def prepare_station_configs(
     target_stations: pd.DataFrame,
     hlookup_df: pd.DataFrame,
-    level_lookup_df: pd.DataFrame,
+    level_lookup_df: Optional[pd.DataFrame],
     constant_k_df: Optional[pd.DataFrame],
     variable_k_stations: List[int],
     use_hybrid_k_lookup: bool,
@@ -544,6 +643,7 @@ def prepare_station_configs(
     weighted: bool,
     cell_nums: int,
     grid_info: dict,
+    is_columnar: bool,
 ):
     lats = grid_info["lats"]
     lons = grid_info["lons"]
@@ -553,34 +653,34 @@ def prepare_station_configs(
 
     hmap = {int(r["idx"]): r.to_dict() for _, r in hlookup_df.iterrows()}
     cmap = {}
-    if constant_k_df is not None:
+    if (not is_columnar) and (constant_k_df is not None):
         cmap = {int(r["idx"]): r.to_dict() for _, r in constant_k_df.iterrows()}
 
-    # Prepare timestep lookup maps only for stations that need them
-    timestep_station_ids = []
-    for _, st in target_stations.iterrows():
-        st_idx = int(st["idx"])
-        if use_hybrid_k_lookup and (st_idx not in variable_k_stations):
-            continue
-        timestep_station_ids.append(st_idx)
-
+    # Prepare timestep lookup maps only for 3D stations that need them
     timestep_lookup_maps: Dict[int, Dict[dt.datetime, dict]] = {}
-    if timestep_station_ids:
-        sub = level_lookup_df[
-            level_lookup_df["idx"].isin(timestep_station_ids)
-        ].copy()
-        sub = sub[
-            (sub["time"] >= pd.Timestamp(start_dt)) &
-            (sub["time"] <= pd.Timestamp(end_dt))
-        ].copy()
+    if (not is_columnar) and (level_lookup_df is not None):
+        timestep_station_ids = []
+        for _, st in target_stations.iterrows():
+            st_idx = int(st["idx"])
+            if use_hybrid_k_lookup and (st_idx not in variable_k_stations):
+                continue
+            timestep_station_ids.append(st_idx)
 
-        for st_idx, grp in sub.groupby("idx"):
-            timestep_lookup_maps[int(st_idx)] = {
-                pd.Timestamp(r["time"]).to_pydatetime(): r.to_dict()
-                for _, r in grp.iterrows()
-            }
+        if timestep_station_ids:
+            sub = level_lookup_df[level_lookup_df["idx"].isin(timestep_station_ids)].copy()
+            sub = sub[
+                (sub["time"] >= pd.Timestamp(start_dt)) &
+                (sub["time"] <= pd.Timestamp(end_dt))
+            ].copy()
+
+            for st_idx, grp in sub.groupby("idx"):
+                timestep_lookup_maps[int(st_idx)] = {
+                    pd.Timestamp(r["time"]).to_pydatetime(): r.to_dict()
+                    for _, r in grp.iterrows()
+                }
 
     station_cfgs = {}
+    n_skipped = 0
 
     for _, st in target_stations.iterrows():
         st_idx = int(st["idx"])
@@ -592,6 +692,7 @@ def prepare_station_configs(
         hrow = hmap.get(st_idx)
         if hrow is None:
             print(f"[skip-config] No horizontal lookup row for station {name} (idx={st_idx}).")
+            n_skipped += 1
             continue
 
         i = int(hrow["i"])
@@ -599,12 +700,18 @@ def prepare_station_configs(
         model_lat = float(hrow["model_lat"])
         model_lon = float(hrow["model_lon"])
 
-        if use_hybrid_k_lookup and (st_idx not in variable_k_stations):
+        if is_columnar:
+            # horizontal-only: no vertical lookup needed
+            lookup_mode = "columnar"
+            constant_k_row = None
+            lookup_map = None
+        elif use_hybrid_k_lookup and (st_idx not in variable_k_stations):
             lookup_mode = "constant"
             constant_k_row = cmap.get(st_idx)
             lookup_map = None
             if constant_k_row is None:
                 print(f"[skip-config] No constant-k row for station {name} (idx={st_idx}).")
+                n_skipped += 1
                 continue
         else:
             lookup_mode = "timestep"
@@ -612,6 +719,7 @@ def prepare_station_configs(
             lookup_map = timestep_lookup_maps.get(st_idx)
             if not lookup_map:
                 print(f"[skip-config] No timestep-k rows for station {name} (idx={st_idx}).")
+                n_skipped += 1
                 continue
 
         i1_s, i2_s, j1_s, j2_s, ii, jj = make_small_box_indices(i, j, Ny, Nx, cell_nums)
@@ -649,52 +757,55 @@ def prepare_station_configs(
             "rows": [],
         }
 
+    print(f"[configs] prepared {len(station_cfgs)} station(s), skipped {n_skipped}.")
     return station_cfgs
 
 
 # ============================================================
-# PER-STATION ROW BUILDER
+# ROW BUILDING (shared math, data-agnostic)
 # ============================================================
 
-def build_records_for_one_station_and_timestep(
-    ds_species: xr.Dataset,
+def resolve_k_for_timestep(cfg: dict, ts: dt.datetime, is_columnar: bool):
+    """
+    Return (k_star, z_target, ok) for a station at a timestep.
+    - columnar : (None, nan, True)
+    - constant : (k, z, True)
+    - timestep : (k, z, True) or (None, nan, False) if no row for this ts
+    """
+    if is_columnar or cfg["lookup_mode"] == "columnar":
+        return None, np.nan, True
+
+    if cfg["lookup_mode"] == "constant":
+        row = cfg["constant_k_row"]
+    else:
+        row = cfg["lookup_map"].get(ts)
+        if row is None:
+            return None, np.nan, False
+
+    k = int(row["level_idx"])
+    z = float(row["level_height_m"]) if "level_height_m" in row else np.nan
+    return k, z, True
+
+
+def build_rows_from_box(
+    grid_box,
     cfg: dict,
     date: str,
     time_: str,
     ts: dt.datetime,
     weighted: bool,
+    k_star_t,
+    z_star_t,
 ):
-    if cfg["lookup_mode"] == "constant":
-        lookup_row = cfg["constant_k_row"]
-    else:
-        lookup_row = cfg["lookup_map"].get(ts)
-
-    if lookup_row is None:
-        return []
-
-    k_star_t = int(lookup_row["level_idx"])
-    z_star_t = float(lookup_row["level_height_m"]) if "level_height_m" in lookup_row else np.nan
-
-    try:
-        grid_ppb = extract_smallbox_ppb_optionA_given_k(
-            ds_species=ds_species,
-            species=species,
-            k_star=k_star_t,
-            i1_s=cfg["i1_s"],
-            i2_s=cfg["i2_s"],
-            j1_s=cfg["j1_s"],
-            j2_s=cfg["j2_s"],
-            to_ppb_fn=to_ppb_mmr,
-        )
-    except Exception as e:
-        print(
-            f"[extract-error] station={cfg['name']} idx={cfg['station_idx']} "
-            f"date={date} time={time_} k={k_star_t} error={e}"
-        )
-        return []
-
-    valid = np.isfinite(grid_ppb)
-    center_ppb = float(grid_ppb[cfg["ii"], cfg["jj"]]) if np.isfinite(grid_ppb[cfg["ii"], cfg["jj"]]) else np.nan
+    """
+    Build the C1..C10 records from an already-read (and already-converted) box.
+    `grid_box` is a 2D ndarray (lat,lon) in the final stored units
+    (ppb for gases, raw value for columnar fields).
+    k_star_t is None for columnar.
+    """
+    valid = np.isfinite(grid_box)
+    center_val = grid_box[cfg["ii"], cfg["jj"]]
+    center_ppb = float(center_val) if np.isfinite(center_val) else np.nan
 
     season = season_from_datetime(ts)
     dn = day_night_label(cfg["lat_s"], cfg["lon_s"], ts)
@@ -709,7 +820,7 @@ def build_records_for_one_station_and_timestep(
         n_excl = int(n_total - n_valid)
         frac_excl = float(n_excl / n_total) if n_total > 0 else np.nan
 
-        vals = grid_ppb[mask_valid]
+        vals = grid_box[mask_valid]
 
         rec = {c: np.nan for c in EXPECTED_COLS}
         rec.update({
@@ -732,7 +843,7 @@ def build_records_for_one_station_and_timestep(
             "sector_type": "CUM",
             "sector": f"C{k}",
             "radius": cfg["radii"][k - 1],
-            "k_star_center": int(k_star_t),
+            "k_star_center": (int(k_star_t) if k_star_t is not None else np.nan),
             "z_target_m": float(z_star_t) if np.isfinite(z_star_t) else np.nan,
             "center_ppb": center_ppb,
             "n_total": n_total,
@@ -761,6 +872,40 @@ def build_records_for_one_station_and_timestep(
         out.append(rec)
 
     return out
+
+
+def build_records_for_one_station_and_timestep(
+    ds_species: xr.Dataset,
+    cfg: dict,
+    date: str,
+    time_: str,
+    ts: dt.datetime,
+    weighted: bool,
+    var: str,
+    dim_info: dict,
+    is_columnar: bool,
+):
+    """Reference path (OLD engine): read this station's box directly, then build rows."""
+    k_star_t, z_star_t, ok = resolve_k_for_timestep(cfg, ts, is_columnar)
+    if not ok:
+        return []
+
+    try:
+        grid_box = extract_box_given_k(
+            ds_species, var, dim_info, is_columnar, k_star_t,
+            cfg["i1_s"], cfg["i2_s"], cfg["j1_s"], cfg["j2_s"],
+        )
+    except Exception as e:
+        print(
+            f"[extract-error] station={cfg['name']} idx={cfg['station_idx']} "
+            f"date={date} time={time_} k={k_star_t} error={e}"
+        )
+        return []
+
+    if not is_columnar:
+        grid_box = to_ppb_mmr(grid_box, species)
+
+    return build_rows_from_box(grid_box, cfg, date, time_, ts, weighted, k_star_t, z_star_t)
 
 
 # ============================================================
@@ -808,7 +953,7 @@ def save_station_outputs(
 
 
 # ============================================================
-# BASELINE: STATION-FIRST
+# BASELINE: STATION-FIRST  (reference engine)
 # ============================================================
 
 def run_time_interval(
@@ -841,10 +986,17 @@ def run_time_interval(
     target_stations = get_target_stations(stations_df, station_selection, station_idx, station_idxs)
 
     hlookup_df = load_horizontal_lookup(HORIZONTAL_LOOKUP_PATH)
-    level_lookup_df = load_level_lookup(LEVEL_LOOKUP_PATH)
-    constant_k_df = load_constant_k_lookup(CONSTANT_K_LOOKUP_PATH) if USE_HYBRID_K_LOOKUP else None
-
     grid_info = load_grid_info_once(base_path, product, species, start_dt, end_dt, step_minutes)
+    is_columnar = grid_info["is_columnar"]
+    var = grid_info["var"]
+    dim_info = grid_info["dim_info"]
+
+    if is_columnar:
+        level_lookup_df = None
+        constant_k_df = None
+    else:
+        level_lookup_df = load_level_lookup(LEVEL_LOOKUP_PATH)
+        constant_k_df = load_constant_k_lookup(CONSTANT_K_LOOKUP_PATH) if USE_HYBRID_K_LOOKUP else None
 
     station_cfgs = prepare_station_configs(
         target_stations=target_stations,
@@ -858,10 +1010,13 @@ def run_time_interval(
         weighted=weighted,
         cell_nums=CELL_NUMS,
         grid_info=grid_info,
+        is_columnar=is_columnar,
     )
 
+    if SKIP_EXISTING and save_parquet:
+        station_cfgs = _filter_existing(station_cfgs, species, mode, out_dir)
+
     results = {}
-    debug_species_file_structure()
     for st_idx, cfg in station_cfgs.items():
         print(f"\n[OLD] Running station {cfg['name']} (idx={st_idx})")
         rows = []
@@ -882,6 +1037,9 @@ def run_time_interval(
                     time_=time_,
                     ts=ts,
                     weighted=weighted,
+                    var=var,
+                    dim_info=dim_info,
+                    is_columnar=is_columnar,
                 ))
             finally:
                 if ds_species is not None:
@@ -917,7 +1075,68 @@ def run_time_interval(
 
 
 # ============================================================
+# STREAMING WRITE HELPER
+# ============================================================
+
+def _parquet_is_complete(path: str) -> bool:
+    """True if `path` exists and opens as a valid parquet (footer readable)."""
+    if not os.path.exists(path):
+        return False
+    try:
+        pf = pq.ParquetFile(path)
+        _ = pf.metadata.num_rows   # touching metadata forces a footer read
+        return True
+    except Exception:
+        return False
+
+
+def _filter_existing(station_cfgs: dict, species: str, mode: str, out_dir: str) -> dict:
+    """Drop stations whose _30min.parquet is already complete (resume support)."""
+    kept, skipped = {}, 0
+    for st_idx, cfg in station_cfgs.items():
+        path = f"{out_dir}/{cfg['name']}_{species}_{mode}_30min.parquet"
+        if _parquet_is_complete(path):
+            skipped += 1
+        else:
+            kept[st_idx] = cfg
+    if skipped:
+        print(f"[skip-existing] skipped {skipped} station(s) with valid parquet; "
+              f"{len(kept)} to run.")
+    return kept
+
+
+def _flush_station_buffer(cfg: dict, species: str) -> int:
+    """
+    Write the station's currently buffered rows as one parquet row-group chunk,
+    then clear the buffer. Creates the per-station writer on first call and keeps
+    it open for subsequent chunks. Schema is fixed from the first chunk (dtypes
+    are stable within a run), so later chunks are cast to it. Returns rows written.
+    """
+    rows = cfg.get("rows")
+    if not rows:
+        return 0
+
+    df = pd.DataFrame.from_records(rows, columns=EXPECTED_COLS)
+    cfg["rows"] = []
+    n = len(df)
+
+    table = pa.Table.from_pandas(df, preserve_index=False)
+    if cfg.get("writer") is None:
+        cfg["schema"] = table.schema
+        cfg["writer"] = pq.ParquetWriter(cfg["out_path"], cfg["schema"])
+    else:
+        table = table.cast(cfg["schema"], safe=False)
+
+    cfg["writer"].write_table(table)
+    cfg["n_written"] = cfg.get("n_written", 0) + n
+    return n
+
+
+# ============================================================
 # FASTER VERSION: TIMESTEP-FIRST MULTI-STATION
+#   - reads each distinct level-plane ONCE per file, slices boxes in memory
+#   - columnar fields => single plane per file
+#   - streaming per-station parquet with bounded memory (production)
 # ============================================================
 
 def run_time_interval_timestep_first(
@@ -931,10 +1150,22 @@ def run_time_interval_timestep_first(
     station_idxs: Optional[List[int]] = None,
     save_csv: bool = True,
     save_parquet: bool = True,
+    stream: bool = True,
 ) -> Dict[int, dict]:
     """
     Faster timestep-first multi-station implementation.
-    Opens each timestep file once and processes all selected stations from it.
+    Opens each timestep file once and processes all selected stations from it,
+    reading each needed horizontal plane a single time.
+
+    When stream=True AND save_parquet=True (production), each station's parquet is
+    written incrementally in row-group chunks and all buffers are flushed whenever
+    MAX_BUFFER_ROWS rows are buffered across stations, so peak RAM stays bounded
+    regardless of station count or period length. The per-station summary is built
+    at the end by reading each finished file back (one station at a time). Output
+    numbers and files are identical to the non-streaming path.
+
+    When stream=False or save_parquet=False (e.g. the old-vs-new harness), rows are
+    accumulated in memory and the station DataFrames are returned for comparison.
     """
     if mode.upper() != "A":
         raise NotImplementedError("This compact script implements only MODE='A'.")
@@ -950,10 +1181,17 @@ def run_time_interval_timestep_first(
     target_stations = get_target_stations(stations_df, station_selection, station_idx, station_idxs)
 
     hlookup_df = load_horizontal_lookup(HORIZONTAL_LOOKUP_PATH)
-    level_lookup_df = load_level_lookup(LEVEL_LOOKUP_PATH)
-    constant_k_df = load_constant_k_lookup(CONSTANT_K_LOOKUP_PATH) if USE_HYBRID_K_LOOKUP else None
-
     grid_info = load_grid_info_once(base_path, product, species, start_dt, end_dt, step_minutes)
+    is_columnar = grid_info["is_columnar"]
+    var = grid_info["var"]
+    dim_info = grid_info["dim_info"]
+
+    if is_columnar:
+        level_lookup_df = None
+        constant_k_df = None
+    else:
+        level_lookup_df = load_level_lookup(LEVEL_LOOKUP_PATH)
+        constant_k_df = load_constant_k_lookup(CONSTANT_K_LOOKUP_PATH) if USE_HYBRID_K_LOOKUP else None
 
     station_cfgs = prepare_station_configs(
         target_stations=target_stations,
@@ -967,39 +1205,170 @@ def run_time_interval_timestep_first(
         weighted=weighted,
         cell_nums=CELL_NUMS,
         grid_info=grid_info,
+        is_columnar=is_columnar,
     )
 
-    for date, time_ in iter_timestamps(start_dt, end_dt, step_minutes):
-        ts = dt.datetime.strptime(date + time_, "%Y%m%d%H%M")
-        spf, _, _, _, _ = build_paths(base_path, product, species, date, time_)
-        if not spf.exists():
-            continue
+    if SKIP_EXISTING and save_parquet:
+        station_cfgs = _filter_existing(station_cfgs, species, mode, out_dir)
+        if not station_cfgs:
+            print("[skip-existing] nothing to do — all selected stations already complete.")
+            return {}
 
-        ds_species = None
-        try:
-            ds_species = xr.open_dataset(spf, decode_times=False)
+    use_stream = bool(stream and save_parquet and STREAMING_FLUSH)
+    if use_stream:
+        for cfg in station_cfgs.values():
+            cfg["writer"] = None
+            cfg["schema"] = None
+            cfg["n_written"] = 0
+            cfg["out_path"] = f"{out_dir}/{cfg['name']}_{species}_{mode}_30min.parquet"
+        print(f"[new-engine] STREAMING: 1 parquet/station, flush at "
+              f"{MAX_BUFFER_ROWS:,} buffered rows, {len(station_cfgs)} open writer(s).")
 
-            for st_idx, cfg in station_cfgs.items():
-                recs = build_records_for_one_station_and_timestep(
-                    ds_species=ds_species,
-                    cfg=cfg,
-                    date=date,
-                    time_=time_,
-                    ts=ts,
-                    weighted=weighted,
-                )
-                if recs:
-                    cfg["rows"].extend(recs)
+    all_ts = list(iter_timestamps(start_dt, end_dt, step_minutes))
+    total_ts = len(all_ts)
+    t_start = time.time()
+    n_files = 0
+    n_station_ts_skipped = 0   # 3D stations with no level row at a timestep
+    buffered = 0
+    since_flush = 0            # processed timesteps since last flush
 
-        finally:
-            if ds_species is not None:
+    use_bar = bool(SHOW_PROGRESS_BAR and _HAVE_TQDM)
+    bar = tqdm(total=total_ts, desc=f"{species} {len(station_cfgs)}st",
+               unit="ts", dynamic_ncols=True) if use_bar else None
+
+    def _log(msg):
+        if bar is not None:
+            bar.write(msg)
+        else:
+            print(msg)
+
+    def _progress(tag):
+        el = time.time() - t_start
+        rate = n_files / el if el > 0 else 0.0
+        pct = (100.0 * n_files / total_ts) if total_ts else 0.0
+        _log(f"[progress] {tag} files={n_files}/{total_ts} ({pct:.1f}%) "
+             f"elapsed={el/60:.1f}min rate={rate:.1f} files/s buffered={buffered:,}")
+
+    def _flush_all(reason):
+        nonlocal buffered, since_flush
+        if not use_stream:
+            return
+        wrote = 0
+        for cfg in station_cfgs.values():
+            wrote += _flush_station_buffer(cfg, species)
+        _log(f"[flush:{reason}] wrote {wrote:,} rows at ts {n_files}/{total_ts} "
+             f"(elapsed {(time.time() - t_start)/60:.1f} min)")
+        buffered = 0
+        since_flush = 0
+
+    try:
+        for (date, time_) in all_ts:
+            ts = dt.datetime.strptime(date + time_, "%Y%m%d%H%M")
+            spf, _, _, _, _ = build_paths(base_path, product, species, date, time_)
+
+            if spf.exists():
+                ds_species = None
                 try:
-                    ds_species.close()
-                except Exception:
-                    pass
+                    ds_species = xr.open_dataset(spf, decode_times=False)
+                    n_files += 1
+                    since_flush += 1
+
+                    # 1) resolve each station's (k, z) for this timestep
+                    resolved: Dict[int, Tuple[Optional[int], float]] = {}
+                    for st_idx, cfg in station_cfgs.items():
+                        k_star_t, z_star_t, ok = resolve_k_for_timestep(cfg, ts, is_columnar)
+                        if not ok:
+                            n_station_ts_skipped += 1
+                            continue
+                        resolved[st_idx] = (k_star_t, z_star_t)
+
+                    if resolved:
+                        # 2) read each distinct plane once
+                        if is_columnar:
+                            planes = {None: read_full_plane(ds_species, var, dim_info, True, None)}
+                        else:
+                            planes = {}
+                            for (k_star_t, _z) in resolved.values():
+                                if k_star_t not in planes:
+                                    planes[k_star_t] = read_full_plane(
+                                        ds_species, var, dim_info, False, k_star_t
+                                    )
+
+                        # 3) per station: slice box from its plane, convert, build rows
+                        for st_idx, (k_star_t, z_star_t) in resolved.items():
+                            cfg = station_cfgs[st_idx]
+                            plane_key = None if is_columnar else k_star_t
+                            plane = planes[plane_key]
+                            grid_box = plane[cfg["i1_s"]:cfg["i2_s"] + 1, cfg["j1_s"]:cfg["j2_s"] + 1]
+
+                            if not is_columnar:
+                                grid_box = to_ppb_mmr(grid_box, species)
+
+                            recs = build_rows_from_box(
+                                grid_box, cfg, date, time_, ts, weighted, k_star_t, z_star_t
+                            )
+                            if recs:
+                                cfg["rows"].extend(recs)
+                                buffered += len(recs)
+                finally:
+                    if ds_species is not None:
+                        try:
+                            ds_species.close()
+                        except Exception:
+                            pass
+
+                # flush on timestep cadence, or earlier if the safety cap is hit
+                if use_stream and (since_flush >= FLUSH_EVERY_TIMESTEPS or buffered >= MAX_BUFFER_ROWS):
+                    _flush_all("cap" if buffered >= MAX_BUFFER_ROWS else f"{FLUSH_EVERY_TIMESTEPS}ts")
+
+                if (not use_bar) and (n_files % PROGRESS_EVERY_FILES == 0) and n_files > 0:
+                    _progress("tick")
+
+            if bar is not None:
+                bar.update(1)
+                bar.set_postfix(files=n_files, buf=f"{buffered:,}", refresh=False)
+    finally:
+        if bar is not None:
+            bar.close()
+        if use_stream:
+            # final flush + close all writers (also runs on error/interrupt)
+            for cfg in station_cfgs.values():
+                try:
+                    _flush_station_buffer(cfg, species)
+                finally:
+                    if cfg.get("writer") is not None:
+                        try:
+                            cfg["writer"].close()
+                        except Exception:
+                            pass
+
+    print(f"[new-engine] processed {n_files} files; "
+          f"station-timestep skips (no level row): {n_station_ts_skipped}")
 
     results = {}
-    debug_species_file_structure()
+
+    if use_stream:
+        # summary per station from the finished parquet (bounded: one station at a time)
+        for st_idx, cfg in station_cfgs.items():
+            path = cfg["out_path"]
+            if cfg.get("n_written", 0) == 0 or not os.path.exists(path):
+                continue
+            df_full = pd.read_parquet(path)
+            df_summary = build_summary(df_full)
+            base = f"{out_dir}/{cfg['name']}_{species}_{mode}"
+            df_summary.to_parquet(f"{base}_summary.parquet", index=False)
+            if save_csv:
+                df_full.to_csv(f"{base}_30min.csv", index=False)
+                df_summary.to_csv(f"{base}_summary.csv", index=False)
+            results[st_idx] = {
+                "station_name": cfg["name"],
+                "n_rows": int(cfg["n_written"]),
+                "path": path,
+            }
+            del df_full
+        return results
+
+    # non-streaming (in-memory) path: accumulate and return DataFrames
     for st_idx, cfg in station_cfgs.items():
         df_30min = pd.DataFrame.from_records(cfg["rows"], columns=EXPECTED_COLS)
         if df_30min.empty:
@@ -1281,4 +1650,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+# %%
 # %%

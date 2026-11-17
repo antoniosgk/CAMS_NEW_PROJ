@@ -10,16 +10,19 @@ import time
 # ============================================================
 # USER SETTINGS
 # ============================================================
-
-NC_DIR = Path("/mnt/store01/agkiokas/CAMS/inst/subsets/O3/")
+VAR_NAME = "SO2"
+NC_DIR = Path(f"/mnt/store01/agkiokas/CAMS/inst/subsets/{VAR_NAME}/")
 NC_GLOB = "*.nc*"
-VAR_NAME = "O3"
+
 
 OUT_DIR = Path("/mnt/store01/agkiokas/CAMS/output_climatologies")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-OUT_FILE = OUT_DIR / "O3_climatology.nc"
-
+OUT_FILE = Path(OUT_DIR / f"{VAR_NAME}_climatology.nc")
+OUT_FILE.parent.mkdir(parents=True, exist_ok=True)
+# quick writability check
+OUT_FILE.touch()
+OUT_FILE.unlink()
 THRESHOLD_DEG = -0.833
 PRINT_EVERY = 1000
 

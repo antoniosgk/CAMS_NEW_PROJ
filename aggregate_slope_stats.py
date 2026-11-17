@@ -26,12 +26,11 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 # ============================================================
 # USER SETTINGS
 # ============================================================
-
-IN_DIR   = Path("/mnt/store01/agkiokas/CAMS/fit_outputs")
-OUT_DIR  = Path("/mnt/store01/agkiokas/CAMS/fit_outputs/summary")
+SPECIES    = "SO2"
+IN_DIR   = Path(f"/mnt/store01/agkiokas/CAMS/fit_outputs/{SPECIES}")
+OUT_DIR  = Path(f"/mnt/store01/agkiokas/CAMS/fit_outputs/summary/{SPECIES}")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-SPECIES    = "O3"
 CSV_SUFFIX = f"_{SPECIES}_area_fits_new.csv"
 
 # Which variables and models to process

@@ -46,8 +46,8 @@ except ImportError:
 # ============================================================
 # CONFIGURATION  (edit here)
 # ============================================================
-
-SUMMARY_DIR  = Path("/mnt/store01/agkiokas/CAMS/fit_outputs/summary")
+SPECIES="SO2"
+SUMMARY_DIR  = Path(f"/mnt/store01/agkiokas/CAMS/fit_outputs/{SPECIES}/summary_new/")
 STATION_CSV  = SUMMARY_DIR / "station_summary.csv"
 COUNTS_CSV   = SUMMARY_DIR / "global_counts.csv"
 OUTPUT_DIR   = SUMMARY_DIR / "plots"
